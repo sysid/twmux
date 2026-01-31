@@ -1,0 +1,41 @@
+[project]
+name = "twmux"
+version = "0.1.0"
+description = "Race-condition-safe tmux wrapper for coding agents"
+readme = "README.md"
+authors = [
+    { name = "sysid", email = "sysid@gmx.de" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "libtmux>=0.46",
+    "typer>=0.15",
+    "rich>=13.0",
+]
+
+[project.scripts]
+twmux = "twmux.bin.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.0",
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+    "twine>=6.0",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
