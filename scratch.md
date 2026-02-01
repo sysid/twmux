@@ -20,7 +20,8 @@ software development.
 
 ### Phase 1: The Safety Layer (Solving the Timing Bug)
 
-Before configuring the orchestrator, we must fix the "Enter" key race condition. Agents are notorious for sending text to tmux faster than the shell can buffer it.
+Before configuring the orchestrator, we must fix the "Enter" key race condition. Agents are
+notorious for sending text to tmux faster than the shell can buffer it.
 
 Create a robust wrapper script at `~/bin/safe-tmux`:
 
@@ -49,7 +50,8 @@ tmux send-keys -t "$TARGET" C-m
 
 ### Phase 2: The Orchestrator Config (`.workmux.yaml`)
 
-Configure `workmux` to be the "Factory" that produces agent environments. Create or edit `.workmux.yaml` in your project root (or `~/.workmux.yaml` for global).
+Configure `workmux` to be the "Factory" that produces agent environments. Create or edit
+`.workmux.yaml` in your project root (or `~/.workmux.yaml` for global).
 
 This config tells workmux: *"When I start a new task, give me a split window with Claude-Code ready to go."*
 
@@ -81,7 +83,8 @@ post_create:
 
 ### Phase 3: The "Conductor" Workflow
 
-This is how you control the process professionally. You never manually copy folders or manage sessions; you just "Dispatch" and "Merge."
+This is how you control the process professionally. You never manually copy folders or manage
+sessions; you just "Dispatch" and "Merge."
 
 #### Step 1: Dispatch (The Human Action)
 

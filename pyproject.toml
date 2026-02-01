@@ -36,6 +36,22 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
+[tool.bumpversion]
+current_version = "0.1.0"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+tag = true
+tag_name = "v{new_version}"
+commit = true
+message = "Bump version: {current_version} → {new_version}"
+
+[[tool.bumpversion.files]]
+filename = "src/twmux/bin/cli.py"
+[[tool.bumpversion.files]]
+filename = "VERSION"
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"

@@ -6,6 +6,9 @@ Race-condition-safe tmux wrapper for coding agents.
 
 ## Features
 
+- **Agent isolation** - Default socket `claude` keeps agent operations separate from user tmux
+- **Safety boundaries** - Non-agent sockets require `--force` flag
+- **Session lifecycle** - Create, monitor, and clean up sessions easily
 - **Race-condition-safe send** - Verifies commands are received before sending Enter
 - **Execute and capture** - Run commands and get output with exit codes
 - **Marker-based execution** - Reliable output capture using unique markers
@@ -15,6 +18,28 @@ Race-condition-safe tmux wrapper for coding agents.
 - **Pane management** - Launch, kill, interrupt, and escape
 
 Nothing you couldn't do with bare "tmux" skill, but much more reliable with agent use.
+
+## Agent Isolation
+
+By default, twmux operates on the `claude` socket, keeping agent tmux sessions separate from your personal tmux:
+
+```bash
+# Agent operations (default socket: claude)
+twmux new myapp
+twmux send -t %0 "echo hello"
+twmux status
+
+# User can monitor without interference
+tmux -L claude attach -t myapp   # Watch agent work
+# Ctrl+b d to detach
+
+# Access user's tmux requires explicit --force
+twmux -L default --force status  # View user's default socket
+```
+
+Socket naming:
+- `claude`, `claude-*` - Agent sockets (no `--force` needed)
+- All other names - Require `--force` flag
 
 ## Installation
 
@@ -33,7 +58,8 @@ twmux [OPTIONS] COMMAND [ARGS]
 | Option | Description |
 |--------|-------------|
 | `--json` | Output as JSON (for programmatic use) |
-| `-L, --socket NAME` | Connect to specific tmux socket |
+| `-L, --socket NAME` | tmux socket name (default: `claude`) |
+| `--force` | Allow non-agent sockets (required for non-`claude*` sockets) |
 | `-v, --verbose` | Verbose output |
 
 ## Commands
@@ -107,11 +133,46 @@ twmux launch -t %5 -c "python3"         # Split and run command
 twmux kill -t %5
 ```
 
+### new - Create session
+
+Create a new tmux session on the agent socket. Prints monitor command for user observation.
+
+```bash
+twmux new myapp                    # Create session "myapp"
+twmux new myapp -c "python3"       # Create and run command
+twmux -L claude-isolated new test  # Use different agent socket
+```
+
+Output includes monitor command:
+```
+Session created: myapp on socket claude
+Pane ID: %0
+
+To monitor:  tmux -L claude attach -t myapp
+To detach:   Ctrl+b d
+```
+
+### kill-session - Kill session
+
+```bash
+twmux kill-session myapp
+```
+
+### kill-server - Kill server
+
+Kill the entire tmux server for a socket.
+
+```bash
+twmux kill-server                    # Kill default claude server
+twmux -L claude-isolated kill-server # Kill specific socket
+```
+
 ### status - Show tmux state
 
 ```bash
-twmux status
-twmux --json status
+twmux status              # Show default socket (claude)
+twmux status --all        # Show all agent sockets (claude*)
+twmux status --all --force  # Show all sockets including user's
 ```
 
 ## Target Addressing
@@ -189,13 +250,21 @@ $ twmux --json exec -t %5 "echo hello"
 $ twmux --json send -t %5 "test"
 {"success": true, "attempts": 1}
 
+$ twmux --json new myapp
+{"session": "myapp", "socket": "claude", "pane_id": "%0", "monitor_cmd": "tmux -L claude attach -t myapp"}
+
 $ twmux --json status
 {
-  "sessions": [
+  "sockets": [
     {
-      "session_id": "$0",
-      "session_name": "main",
-      "windows": [...]
+      "socket": "claude",
+      "sessions": [
+        {
+          "session_id": "$0",
+          "session_name": "myapp",
+          "windows": [...]
+        }
+      ]
     }
   ]
 }

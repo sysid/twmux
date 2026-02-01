@@ -6,7 +6,9 @@ from typing import Annotated
 import typer
 from rich import print as rprint
 
-from twmux import __version__
+from twmux.lib.safety import DEFAULT_SOCKET, SocketValidationError, validate_socket
+
+__version__ = "0.1.0"
 
 app = typer.Typer(
     help="Race-condition-safe tmux wrapper for coding agents.",
@@ -26,19 +28,33 @@ app = typer.Typer(
 
 # Global options
 json_output: bool = False
-socket_name: str | None = None
+socket_name: str = DEFAULT_SOCKET
+force_socket: bool = False
 
 
 @app.callback()
 def main(
-    json: Annotated[bool, typer.Option("--json", help="Output as JSON for programmatic use")] = False,
+    json: Annotated[
+        bool, typer.Option("--json", help="Output as JSON for programmatic use")
+    ] = False,
     verbose: Annotated[bool, typer.Option("-v", "--verbose", help="Verbose output")] = False,
-    socket: Annotated[str | None, typer.Option("-L", "--socket", help="tmux socket name")] = None,
+    socket: Annotated[
+        str, typer.Option("-L", "--socket", help="tmux socket name")
+    ] = DEFAULT_SOCKET,
+    force: Annotated[bool, typer.Option("--force", help="Allow non-agent sockets")] = False,
 ) -> None:
     """Global options applied to all commands."""
-    global json_output, socket_name
+    global json_output, socket_name, force_socket
     json_output = json
     socket_name = socket
+    force_socket = force
+
+    # Validate socket early
+    try:
+        validate_socket(socket_name, force_socket)
+    except SocketValidationError as e:
+        rprint(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
 
 def get_pane(target: str):
@@ -115,9 +131,16 @@ def version() -> None:
 )
 def send(
     text: Annotated[str, typer.Argument(help="Text to send to the pane")],
-    target: Annotated[str, typer.Option("-t", "--target", help="Target pane", show_default=True)] = "",
-    no_enter: Annotated[bool, typer.Option("--no-enter", help="Send text without pressing Enter")] = False,
-    delay: Annotated[float, typer.Option("--delay", help="Delay before Enter (seconds)", show_default=True)] = 0.05,
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Target pane", show_default=True)
+    ] = "",
+    no_enter: Annotated[
+        bool, typer.Option("--no-enter", help="Send text without pressing Enter")
+    ] = False,
+    delay: Annotated[
+        float,
+        typer.Option("--delay", help="Delay before Enter (seconds)", show_default=True),
+    ] = 0.05,
 ) -> None:
     """Send text to pane with race-condition-safe Enter handling.
 
@@ -149,8 +172,13 @@ def send(
 )
 def exec_cmd(
     command: Annotated[str, typer.Argument(help="Shell command to execute")],
-    target: Annotated[str, typer.Option("-t", "--target", help="Target pane", show_default=True)] = "",
-    timeout: Annotated[float, typer.Option("--timeout", help="Max wait time (seconds)", show_default=True)] = 30.0,
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Target pane", show_default=True)
+    ] = "",
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Max wait time (seconds)", show_default=True),
+    ] = 30.0,
 ) -> None:
     """Execute command and capture output with exit code.
 
@@ -185,8 +213,12 @@ def exec_cmd(
 """,
 )
 def capture(
-    target: Annotated[str, typer.Option("-t", "--target", help="Target pane", show_default=True)] = "",
-    lines: Annotated[int | None, typer.Option("-n", "--lines", help="Limit to last N lines")] = None,
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Target pane", show_default=True)
+    ] = "",
+    lines: Annotated[
+        int | None, typer.Option("-n", "--lines", help="Limit to last N lines")
+    ] = None,
 ) -> None:
     """Capture current visible pane content.
 
@@ -219,9 +251,17 @@ def capture(
 """,
 )
 def wait_idle(
-    target: Annotated[str, typer.Option("-t", "--target", help="Target pane", show_default=True)] = "",
-    timeout: Annotated[float, typer.Option("--timeout", help="Max wait time (seconds)", show_default=True)] = 30.0,
-    interval: Annotated[float, typer.Option("--interval", help="Poll interval (seconds)", show_default=True)] = 0.2,
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Target pane", show_default=True)
+    ] = "",
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Max wait time (seconds)", show_default=True),
+    ] = 30.0,
+    interval: Annotated[
+        float,
+        typer.Option("--interval", help="Poll interval (seconds)", show_default=True),
+    ] = 0.2,
 ) -> None:
     """Wait until pane output stops changing.
 
@@ -250,7 +290,9 @@ def wait_idle(
 """,
 )
 def interrupt(
-    target: Annotated[str, typer.Option("-t", "--target", help="Target pane", show_default=True)] = "",
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Target pane", show_default=True)
+    ] = "",
 ) -> None:
     """Send Ctrl+C to interrupt running process.
 
@@ -276,9 +318,15 @@ def interrupt(
 """,
 )
 def launch(
-    target: Annotated[str, typer.Option("-t", "--target", help="Pane to split", show_default=True)] = "",
-    command: Annotated[str | None, typer.Option("-c", "--command", help="Command to run in new pane")] = None,
-    vertical: Annotated[bool, typer.Option("-v", "--vertical", help="Split right instead of below")] = False,
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Pane to split", show_default=True)
+    ] = "",
+    command: Annotated[
+        str | None, typer.Option("-c", "--command", help="Command to run in new pane")
+    ] = None,
+    vertical: Annotated[
+        bool, typer.Option("-v", "--vertical", help="Split right instead of below")
+    ] = False,
 ) -> None:
     """Create new pane by splitting target pane.
 
@@ -309,7 +357,9 @@ def launch(
 """,
 )
 def kill(
-    target: Annotated[str, typer.Option("-t", "--target", help="Pane to kill", show_default=True)] = "",
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Pane to kill", show_default=True)
+    ] = "",
 ) -> None:
     """Terminate pane and its processes.
 
@@ -332,7 +382,9 @@ def kill(
 """,
 )
 def escape(
-    target: Annotated[str, typer.Option("-t", "--target", help="Target pane", show_default=True)] = "",
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Target pane", show_default=True)
+    ] = "",
 ) -> None:
     """Send Escape key to pane.
 
@@ -352,53 +404,269 @@ def escape(
     rich_help_panel="Info",
     epilog="""
 [bold]Examples[/bold]
-  twmux status
-  twmux --json status
+  twmux status              # Show default socket (claude)
+  twmux status --all        # Show all agent sockets (claude*)
+  twmux status --all --force  # Show all sockets including user's
+
+[bold]Access Levels[/bold]
+  Default:       Only claude socket
+  --all:         All claude* sockets
+  --all --force: All sockets (including user's tmux)
 """,
 )
-def status() -> None:
-    """Show all tmux sessions, windows, and panes.
+def status(
+    all_sockets: Annotated[
+        bool, typer.Option("--all", help="Show all agent sockets (claude*)")
+    ] = False,
+) -> None:
+    """Show tmux sessions, windows, and panes.
 
     Lists hierarchy with pane IDs (%N format) for use with -t flag.
-    Run this first to discover pane IDs for other commands.
+    Default shows only the agent socket (claude).
 
-    JSON: {"sessions": [{session_id, session_name, windows: [...]}]}
+    JSON: {"sockets": [{socket, sessions: [...]}]}
     Exit: Always 0.
+    """
+    from libtmux import Server
+
+    from twmux.lib.safety import enumerate_agent_sockets, enumerate_all_sockets
+
+    # Determine which sockets to show
+    if all_sockets:
+        if force_socket:
+            sockets_to_show = enumerate_all_sockets()
+        else:
+            sockets_to_show = enumerate_agent_sockets()
+    else:
+        sockets_to_show = [socket_name]
+
+    all_data = []
+
+    for sock in sockets_to_show:
+        try:
+            server = Server(socket_name=sock)
+            if not server.sessions:
+                continue
+        except Exception:
+            continue
+
+        sessions_data = []
+        for session in server.sessions:
+            windows_data = []
+            for window in session.windows:
+                panes_data = [
+                    {"pane_id": p.pane_id, "pane_index": p.pane_index} for p in window.panes
+                ]
+                windows_data.append(
+                    {
+                        "window_id": window.window_id,
+                        "window_index": window.window_index,
+                        "window_name": window.window_name,
+                        "panes": panes_data,
+                    }
+                )
+            sessions_data.append(
+                {
+                    "session_id": session.session_id,
+                    "session_name": session.session_name,
+                    "windows": windows_data,
+                }
+            )
+
+        all_data.append(
+            {
+                "socket": sock,
+                "sessions": sessions_data,
+            }
+        )
+
+    if json_output:
+        print(json_lib.dumps({"sockets": all_data}, indent=2))
+    else:
+        if not all_data:
+            rprint(f'No tmux server running on socket "{socket_name}".')
+            rprint('Use "twmux new <session>" to create one.')
+            return
+
+        for socket_data in all_data:
+            sock = socket_data["socket"]
+            rprint(f"[bold cyan][{sock}][/bold cyan]")
+            for s in socket_data["sessions"]:
+                rprint(f"  [bold]{s['session_name']}[/bold] ({s['session_id']})")
+                for w in s["windows"]:
+                    rprint(f"    {w['window_index']}: {w['window_name']} ({w['window_id']})")
+                    for p in w["panes"]:
+                        rprint(f"      .{p['pane_index']}: {p['pane_id']}")
+
+
+@app.command(
+    rich_help_panel="Session Management",
+    epilog="""
+[bold]Examples[/bold]
+  twmux new myapp                    # Create session "myapp"
+  twmux new myapp -c "python3"       # Create and run command
+  twmux -L claude-isolated new test  # Use different socket
+""",
+)
+def new(
+    session_name: Annotated[str, typer.Argument(help="Name for the new session")],
+    command: Annotated[
+        str | None, typer.Option("-c", "--command", help="Command to run in pane")
+    ] = None,
+) -> None:
+    """Create new tmux session on agent socket.
+
+    Creates a session on the default socket (claude) or specified socket.
+    Prints monitor command for user to attach and observe.
+
+    JSON: {"session": str, "socket": str, "pane_id": str, "monitor_cmd": str}
+    Exit: 0 success, 1 if session already exists.
+    """
+    from libtmux import Server
+    from libtmux.exc import LibTmuxException
+
+    server = Server(socket_name=socket_name)
+
+    # Check if session already exists
+    existing = [s for s in server.sessions if s.session_name == session_name]
+    if existing:
+        if json_output:
+            print(json_lib.dumps({"error": f"Session '{session_name}' already exists"}))
+        else:
+            rprint(
+                f"[red]Error:[/red] Session '{session_name}' already exists "
+                f"on socket '{socket_name}'"
+            )
+        raise typer.Exit(1)
+
+    # Create session
+    try:
+        session = server.new_session(session_name=session_name)
+    except LibTmuxException as e:
+        if json_output:
+            print(json_lib.dumps({"error": str(e)}))
+        else:
+            rprint(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    pane = session.active_window.active_pane
+
+    # Run command if specified
+    if command:
+        pane.send_keys(command, enter=True)
+
+    monitor_cmd = f"tmux -L {socket_name} attach -t {session_name}"
+
+    if json_output:
+        print(
+            json_lib.dumps(
+                {
+                    "session": session_name,
+                    "socket": socket_name,
+                    "pane_id": pane.pane_id,
+                    "monitor_cmd": monitor_cmd,
+                }
+            )
+        )
+    else:
+        rprint(f"Session created: [bold]{session_name}[/bold] on socket [bold]{socket_name}[/bold]")
+        rprint(f"Pane ID: {pane.pane_id}")
+        rprint()
+        rprint(f"To monitor:  [cyan]{monitor_cmd}[/cyan]")
+        rprint("To detach:   [cyan]Ctrl+b d[/cyan]")
+
+
+@app.command(
+    name="kill-session",
+    rich_help_panel="Session Management",
+    epilog="""
+[bold]Example[/bold]
+  twmux kill-session myapp
+""",
+)
+def kill_session_cmd(
+    session_name: Annotated[str, typer.Argument(help="Session to kill")],
+) -> None:
+    """Kill a tmux session.
+
+    Removes the specified session from the socket.
+
+    JSON: {"killed": true, "socket": str, "session": str}
+    Exit: 0 success, 1 if session not found.
     """
     from libtmux import Server
 
     server = Server(socket_name=socket_name)
 
-    sessions_data = []
-    for session in server.sessions:
-        windows_data = []
-        for window in session.windows:
-            panes_data = [{"pane_id": p.pane_id, "pane_index": p.pane_index} for p in window.panes]
-            windows_data.append(
-                {
-                    "window_id": window.window_id,
-                    "window_index": window.window_index,
-                    "window_name": window.window_name,
-                    "panes": panes_data,
-                }
+    # Find session
+    sessions = [s for s in server.sessions if s.session_name == session_name]
+    if not sessions:
+        if json_output:
+            print(json_lib.dumps({"error": f"Session '{session_name}' not found"}))
+        else:
+            rprint(
+                f"[red]Error:[/red] Session '{session_name}' not found on socket '{socket_name}'"
             )
-        sessions_data.append(
-            {
-                "session_id": session.session_id,
-                "session_name": session.session_name,
-                "windows": windows_data,
-            }
-        )
+        raise typer.Exit(1)
+
+    sessions[0].kill()
 
     if json_output:
-        print(json_lib.dumps({"sessions": sessions_data}, indent=2))
+        print(
+            json_lib.dumps(
+                {
+                    "killed": True,
+                    "socket": socket_name,
+                    "session": session_name,
+                }
+            )
+        )
     else:
-        for s in sessions_data:
-            rprint(f"[bold]{s['session_name']}[/bold] ({s['session_id']})")
-            for w in s["windows"]:
-                rprint(f"  {w['window_index']}: {w['window_name']} ({w['window_id']})")
-                for p in w["panes"]:
-                    rprint(f"    .{p['pane_index']}: {p['pane_id']}")
+        rprint(f"Killed session [bold]{session_name}[/bold] on socket [bold]{socket_name}[/bold]")
+
+
+@app.command(
+    name="kill-server",
+    rich_help_panel="Session Management",
+    epilog="""
+[bold]Example[/bold]
+  twmux kill-server                    # Kill default claude server
+  twmux -L claude-isolated kill-server # Kill specific socket
+""",
+)
+def kill_server_cmd() -> None:
+    """Kill entire tmux server for socket.
+
+    Terminates the tmux server and all its sessions.
+    Only operates on agent sockets (claude*) unless --force is used.
+
+    JSON: {"killed": true, "socket": str}
+    Exit: 0 success, 1 if no server running.
+    """
+    from libtmux import Server
+
+    server = Server(socket_name=socket_name)
+
+    if not server.sessions:
+        if json_output:
+            print(json_lib.dumps({"error": f"No server running on socket '{socket_name}'"}))
+        else:
+            rprint(f"[red]Error:[/red] No server running on socket '{socket_name}'")
+        raise typer.Exit(1)
+
+    server.kill()
+
+    if json_output:
+        print(
+            json_lib.dumps(
+                {
+                    "killed": True,
+                    "socket": socket_name,
+                }
+            )
+        )
+    else:
+        rprint(f"Killed server on socket [bold]{socket_name}[/bold]")
 
 
 if __name__ == "__main__":
