@@ -402,17 +402,7 @@ def escape(
 
 @app.command(
     rich_help_panel="Info",
-    epilog="""
-[bold]Examples[/bold]
-  twmux status              # Show default socket (claude)
-  twmux status --all        # Show all agent sockets (claude*)
-  twmux status --all --force  # Show all sockets including user's
-
-[bold]Access Levels[/bold]
-  Default:       Only claude socket
-  --all:         All claude* sockets
-  --all --force: All sockets (including user's tmux)
-""",
+    epilog="Use --all for all agent sockets. Use 'twmux --force status --all' for ALL sockets.",
 )
 def status(
     all_sockets: Annotated[

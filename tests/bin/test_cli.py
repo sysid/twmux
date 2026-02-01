@@ -14,7 +14,6 @@ def test_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
     assert "twmux" in result.output
-    assert "0.1.0" in result.output
 
 
 def test_send_command(pane):

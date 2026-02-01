@@ -34,7 +34,7 @@ tmux -L claude attach -t myapp   # Watch agent work
 # Ctrl+b d to detach
 
 # Access user's tmux requires explicit --force
-twmux -L default --force status  # View user's default socket
+twmux --force -L default status  # View user's default socket
 ```
 
 Socket naming:
@@ -170,9 +170,9 @@ twmux -L claude-isolated kill-server # Kill specific socket
 ### status - Show tmux state
 
 ```bash
-twmux status              # Show default socket (claude)
-twmux status --all        # Show all agent sockets (claude*)
-twmux status --all --force  # Show all sockets including user's
+twmux status                # Show default socket (claude)
+twmux status --all          # Show all agent sockets (claude*)
+twmux --force status --all  # Show all sockets including user's
 ```
 
 ## Target Addressing
