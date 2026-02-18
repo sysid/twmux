@@ -108,6 +108,40 @@ def output_result(data: dict) -> None:
             rprint(f"{key}: {value}")
 
 
+def resolve_destination(server, destination: str, source_session_name: str, source_desc: str):
+    """Parse destination and find target session.
+
+    Returns (session, window_spec) or emits error and raises typer.Exit(1).
+    source_desc: e.g. "pane %5" for error messages.
+    """
+    parts = destination.split(":", 1)
+    session_name = parts[0]
+    window_spec = parts[1] if len(parts) > 1 and parts[1] else None
+
+    sessions = [s for s in server.sessions if s.session_name == session_name]
+    if not sessions:
+        if json_output:
+            print(json_lib.dumps({"error": f"Session not found: {session_name}"}))
+        else:
+            rprint(f"[red]Error:[/red] Session not found: {session_name}")
+        raise typer.Exit(1)
+
+    dest_session = sessions[0]
+
+    if dest_session.session_name == source_session_name:
+        if json_output:
+            print(
+                json_lib.dumps(
+                    {"error": f"{source_desc} is already in session '{source_session_name}'"}
+                )
+            )
+        else:
+            rprint(f"[red]Error:[/red] {source_desc} is already in session '{source_session_name}'")
+        raise typer.Exit(1)
+
+    return dest_session, window_spec
+
+
 @app.command(rich_help_panel="Info")
 def version() -> None:
     """Show twmux version.
@@ -372,6 +406,61 @@ def kill(
     pane.kill()
 
     output_result({"killed": True})
+
+
+@app.command(
+    name="move-pane",
+    rich_help_panel="Pane Management",
+    epilog="""
+[bold]Examples[/bold]
+  twmux move-pane -t %5 debug           # New window in "debug"
+  twmux move-pane -t %5 debug:0         # Join window 0 in "debug"
+""",
+)
+def move_pane(
+    destination: Annotated[str, typer.Argument(help="Destination: session or session:window")],
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Source pane", show_default=True)
+    ] = "",
+) -> None:
+    """Move pane to another session.
+
+    Session-only destination creates a new window. Session:window joins
+    existing window.
+
+    JSON: {"pane_id": str, "destination_session": str, "new_window": bool}
+    Exit: 0 success, 1 if same-session or destination not found.
+    """
+    pane = get_pane(target)
+    source_session_name = pane.window.session.session_name
+
+    dest_session, window_spec = resolve_destination(
+        pane.server, destination, source_session_name, f"pane {pane.pane_id}"
+    )
+
+    if window_spec is not None:
+        # join-pane: move pane into existing window
+        pane.server.cmd(
+            "join-pane",
+            "-d",
+            "-s",
+            pane.pane_id,
+            "-t",
+            f"{dest_session.session_id}:{window_spec}",
+        )
+        new_window = False
+    else:
+        # break-pane: move pane to new window in destination session
+        pane.server.cmd("break-pane", "-d", "-s", pane.pane_id, "-t", f"{dest_session.session_id}:")
+        new_window = True
+
+    output_result(
+        {
+            "pane_id": pane.pane_id,
+            "destination_session": dest_session.session_name,
+            "new_window": new_window,
+        }
+    )
 
 
 @app.command(
@@ -657,6 +746,49 @@ def kill_server_cmd() -> None:
         )
     else:
         rprint(f"Killed server on socket [bold]{socket_name}[/bold]")
+
+
+@app.command(
+    name="move-window",
+    rich_help_panel="Session Management",
+    epilog="""
+[bold]Examples[/bold]
+  twmux move-window -t build:0 debug       # Move window 0 of "build"
+  twmux move-window -t %5 debug            # Move window containing %5
+""",
+)
+def move_window(
+    destination: Annotated[str, typer.Argument(help="Destination session name")],
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Source pane in window to move", show_default=True)
+    ] = "",
+) -> None:
+    """Move window to another session.
+
+    Moves the entire window (with all panes) to the destination session.
+    Target identifies a pane in the window to move.
+
+    JSON: {"window_id": str, "window_index": str, "pane_ids": [str], "destination_session": str}
+    Exit: 0 success, 1 if same-session or destination not found.
+    """
+    pane = get_pane(target)
+    window = pane.window
+    source_session_name = window.session.session_name
+
+    dest_session, _window_spec = resolve_destination(
+        pane.server, destination, source_session_name, f"window {window.window_id}"
+    )
+
+    window.move_window(session=dest_session.session_id)
+
+    output_result(
+        {
+            "window_id": window.window_id,
+            "window_index": window.window_index,
+            "pane_ids": [p.pane_id for p in window.panes],
+            "destination_session": dest_session.session_name,
+        }
+    )
 
 
 if __name__ == "__main__":

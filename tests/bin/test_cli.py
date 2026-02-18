@@ -207,7 +207,7 @@ class TestSocketSafety:
         from libtmux import Server
 
         server = Server(socket_name="claude-test-safety")
-        session = server.new_session("test-session")
+        server.new_session("test-session")
         try:
             result = runner.invoke(app, ["-L", "claude-test-safety", "status"])
             assert result.exit_code == 0
@@ -359,6 +359,319 @@ class TestKillServerCommand:
 
         data = json.loads(result.output)
         assert data["killed"] is True
+
+
+class TestMovePaneCommand:
+    """Test twmux move-pane command."""
+
+    def test_move_pane_creates_new_window(self):
+        """T001: move-pane creates new window in destination session."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane")
+        try:
+            src_session = server.new_session("source")
+            server.new_session("dest")
+
+            # Split to have 2 panes so source session survives the move
+            src_pane = src_session.active_window.active_pane.split()
+            pane_id = src_pane.pane_id
+
+            args = [
+                "-L",
+                "claude-test-mvpane",
+                "--force",
+                "--json",
+                "move-pane",
+                "-t",
+                pane_id,
+                "dest",
+            ]
+            result = runner.invoke(app, args)
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            assert data["pane_id"] == pane_id
+            assert data["destination_session"] == "dest"
+            assert data["new_window"] is True
+
+            # Verify pane is in destination session
+            dst_session = [s for s in server.sessions if s.session_name == "dest"][0]
+            dst_pane_ids = [p.pane_id for w in dst_session.windows for p in w.panes]
+            assert pane_id in dst_pane_ids
+
+            # Verify pane no longer in source session
+            src_session_fresh = [s for s in server.sessions if s.session_name == "source"][0]
+            src_pane_ids = [p.pane_id for w in src_session_fresh.windows for p in w.panes]
+            assert pane_id not in src_pane_ids
+        finally:
+            server.kill()
+
+    def test_move_pane_same_session_error(self):
+        """T002: move-pane to same session returns error."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane2")
+        try:
+            server.new_session("source")
+            pane = server.sessions[0].active_window.active_pane
+            pane_id = pane.pane_id
+
+            args = [
+                "-L",
+                "claude-test-mvpane2",
+                "--force",
+                "--json",
+                "move-pane",
+                "-t",
+                pane_id,
+                "source",
+            ]
+            result = runner.invoke(app, args)
+            assert result.exit_code == 1
+
+            data = json.loads(result.output)
+            assert "error" in data
+        finally:
+            server.kill()
+
+    def test_move_pane_destination_not_found(self):
+        """T003: move-pane to non-existent session returns error."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane3")
+        try:
+            server.new_session("source")
+            pane = server.sessions[0].active_window.active_pane
+            pane_id = pane.pane_id
+
+            args = [
+                "-L",
+                "claude-test-mvpane3",
+                "--force",
+                "--json",
+                "move-pane",
+                "-t",
+                pane_id,
+                "nonexistent",
+            ]
+            result = runner.invoke(app, args)
+            assert result.exit_code == 1
+
+            data = json.loads(result.output)
+            assert "error" in data
+        finally:
+            server.kill()
+
+    def test_move_pane_json_output_format(self):
+        """T004: move-pane JSON contains required fields per contract."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane4")
+        try:
+            src_session = server.new_session("source")
+            server.new_session("dest")
+
+            # Need 2 panes so source survives
+            src_pane = src_session.active_window.active_pane.split()
+            pane_id = src_pane.pane_id
+
+            args = [
+                "-L",
+                "claude-test-mvpane4",
+                "--force",
+                "--json",
+                "move-pane",
+                "-t",
+                pane_id,
+                "dest",
+            ]
+            result = runner.invoke(app, args)
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            # Verify types per cli-contract.md
+            assert isinstance(data["pane_id"], str)
+            assert isinstance(data["destination_session"], str)
+            assert isinstance(data["new_window"], bool)
+        finally:
+            server.kill()
+
+    def test_move_pane_join_existing_window(self):
+        """T013: move-pane with session:window joins existing window."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane5")
+        try:
+            src_session = server.new_session("source")
+            dst_session = server.new_session("dest")
+
+            # Split source so it survives
+            src_pane = src_session.active_window.active_pane.split()
+            pane_id = src_pane.pane_id
+
+            # Get actual window index (respects tmux base-index setting)
+            dst_window = dst_session.windows[0]
+            dst_win_idx = dst_window.window_index
+            panes_before = len(dst_window.panes)
+
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-mvpane5",
+                    "--force",
+                    "--json",
+                    "move-pane",
+                    "-t",
+                    pane_id,
+                    f"dest:{dst_win_idx}",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            assert data["pane_id"] == pane_id
+            assert data["destination_session"] == "dest"
+            assert data["new_window"] is False
+
+            # Verify pane joined destination window (now has one more pane)
+            dst_session_fresh = [s for s in server.sessions if s.session_name == "dest"][0]
+            # Find the window by ID to avoid index confusion
+            dst_window_fresh = [
+                w for w in dst_session_fresh.windows if w.window_id == dst_window.window_id
+            ][0]
+            assert len(dst_window_fresh.panes) == panes_before + 1
+
+            # Verify pane is in destination window
+            dst_pane_ids = [p.pane_id for p in dst_window_fresh.panes]
+            assert pane_id in dst_pane_ids
+        finally:
+            server.kill()
+
+
+class TestMoveWindowCommand:
+    """Test twmux move-window command."""
+
+    def test_move_window_happy_path(self):
+        """T008: move-window moves window with all panes to destination."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvwin")
+        try:
+            src_session = server.new_session("source")
+            server.new_session("dest")
+
+            # Create multi-pane window
+            src_pane = src_session.active_window.active_pane
+            new_pane = src_pane.split()
+            window_pane_ids = [src_pane.pane_id, new_pane.pane_id]
+
+            # Create a second window so source session survives
+            src_session.new_window()
+
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-mvwin",
+                    "--force",
+                    "--json",
+                    "move-window",
+                    "-t",
+                    src_pane.pane_id,
+                    "dest",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            assert "window_id" in data
+            assert "window_index" in data
+            assert "pane_ids" in data
+            assert data["destination_session"] == "dest"
+
+            # Verify all panes moved
+            for pid in window_pane_ids:
+                assert pid in data["pane_ids"]
+
+            # Verify panes are in destination session
+            dst_session = [s for s in server.sessions if s.session_name == "dest"][0]
+            dst_pane_ids = [p.pane_id for w in dst_session.windows for p in w.panes]
+            for pid in window_pane_ids:
+                assert pid in dst_pane_ids
+        finally:
+            server.kill()
+
+    def test_move_window_same_session_error(self):
+        """T009: move-window to same session returns error."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvwin2")
+        try:
+            server.new_session("source")
+            pane = server.sessions[0].active_window.active_pane
+            pane_id = pane.pane_id
+
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-mvwin2",
+                    "--force",
+                    "--json",
+                    "move-window",
+                    "-t",
+                    pane_id,
+                    "source",
+                ],
+            )
+            assert result.exit_code == 1
+
+            data = json.loads(result.output)
+            assert "error" in data
+        finally:
+            server.kill()
+
+    def test_move_window_json_output_format(self):
+        """T010: move-window JSON contains required fields per contract."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvwin3")
+        try:
+            src_session = server.new_session("source")
+            server.new_session("dest")
+
+            src_pane = src_session.active_window.active_pane
+            src_pane.split()
+
+            # Create second window so source survives
+            src_session.new_window()
+
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-mvwin3",
+                    "--force",
+                    "--json",
+                    "move-window",
+                    "-t",
+                    src_pane.pane_id,
+                    "dest",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            # Verify types per cli-contract.md
+            assert isinstance(data["window_id"], str)
+            assert isinstance(data["window_index"], str)
+            assert isinstance(data["pane_ids"], list)
+            assert all(isinstance(pid, str) for pid in data["pane_ids"])
+            assert isinstance(data["destination_session"], str)
+        finally:
+            server.kill()
 
 
 class TestStatusEnhanced:

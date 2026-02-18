@@ -2,7 +2,7 @@
   <img src="docs/logo_264x264.png" alt="twmux logo" width="200">
 </p>
 
-Race-condition-safe tmux wrapper for coding agents.
+Race-condition-safe **tmux** wrapper for coding agents.
 
 ## Features
 
@@ -16,6 +16,7 @@ Race-condition-safe tmux wrapper for coding agents.
 - **JSON output** - Programmatic interface for all commands
 - **Flexible targeting** - Pane IDs or session:window.pane syntax
 - **Pane management** - Launch, kill, interrupt, and escape
+- **Cross-session moves** - Move panes and windows between sessions
 
 Nothing you couldn't do with bare "tmux" skill, but much more reliable with agent use.
 
@@ -132,6 +133,30 @@ twmux launch -t %5 -c "python3"         # Split and run command
 ```bash
 twmux kill -t %5
 ```
+
+### move-pane - Move pane to another session
+
+Move a pane to another session, creating a new window or joining an existing one.
+
+```bash
+twmux move-pane -t %5 debug           # New window in "debug"
+twmux move-pane -t %5 debug:0         # Join window 0 in "debug"
+twmux --json move-pane -t %5 debug    # JSON output
+```
+
+Returns: `{"pane_id": "%5", "destination_session": "debug", "new_window": true}`
+
+### move-window - Move window to another session
+
+Move an entire window (with all panes) to another session.
+
+```bash
+twmux move-window -t build:0 debug       # Move window 0 of "build"
+twmux move-window -t %5 debug            # Move window containing %5
+twmux --json move-window -t build:0 debug # JSON output
+```
+
+Returns: `{"window_id": "@1", "window_index": "1", "pane_ids": ["%2", "%3"], "destination_session": "debug"}`
 
 ### new - Create session
 
