@@ -1,6 +1,6 @@
 [project]
 name = "twmux"
-version = "0.2.1"
+version = "0.3.0"
 description = "Race-condition-safe tmux wrapper for coding agents"
 readme = "README.md"
 authors = [
@@ -37,7 +37,7 @@ target-version = "py313"
 select = ["E", "F", "I", "UP"]
 
 [tool.bumpversion]
-current_version = "0.2.1"
+current_version = "0.3.0"
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
 serialize = ["{major}.{minor}.{patch}"]
 tag = true
