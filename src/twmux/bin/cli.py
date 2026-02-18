@@ -12,7 +12,6 @@ __version__ = "0.3.0"
 
 app = typer.Typer(
     help="Race-condition-safe tmux wrapper for coding agents.",
-    no_args_is_help=True,
     epilog="""
 [bold]Target Syntax (-t)[/bold]
   %5           Pane ID (recommended, get via 'twmux status')
@@ -32,12 +31,22 @@ socket_name: str = DEFAULT_SOCKET
 force_socket: bool = False
 
 
-@app.callback()
+def print_version() -> None:
+    """Print version information."""
+    if json_output:
+        print(json_lib.dumps({"version": __version__}))
+    else:
+        print(f"twmux {__version__}")
+
+
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     json: Annotated[
         bool, typer.Option("--json", help="Output as JSON for programmatic use")
     ] = False,
     verbose: Annotated[bool, typer.Option("-v", "--verbose", help="Verbose output")] = False,
+    version: Annotated[bool, typer.Option("-V", "--version", help="Show version")] = False,
     socket: Annotated[
         str, typer.Option("-L", "--socket", help="tmux socket name")
     ] = DEFAULT_SOCKET,
@@ -48,6 +57,13 @@ def main(
     json_output = json
     socket_name = socket
     force_socket = force
+
+    if ctx.invoked_subcommand is None:
+        if version:
+            print_version()
+            raise typer.Exit(0)
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
     # Validate socket early
     try:
@@ -140,18 +156,6 @@ def resolve_destination(server, destination: str, source_session_name: str, sour
         raise typer.Exit(1)
 
     return dest_session, window_spec
-
-
-@app.command(rich_help_panel="Info")
-def version() -> None:
-    """Show twmux version.
-
-    JSON: {"version": str}
-    """
-    if json_output:
-        print(json_lib.dumps({"version": __version__}))
-    else:
-        print(f"twmux {__version__}")
 
 
 @app.command(

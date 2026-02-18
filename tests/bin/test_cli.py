@@ -10,10 +10,22 @@ from twmux.bin.cli import app
 runner = CliRunner()
 
 
-def test_version():
-    result = runner.invoke(app, ["version"])
+def test_version_flag():
+    result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "twmux" in result.output
+
+
+def test_version_flag_short():
+    result = runner.invoke(app, ["-V"])
+    assert result.exit_code == 0
+    assert "twmux" in result.output
+
+
+def test_no_args_shows_help():
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert "Usage" in result.output or "twmux" in result.output
 
 
 def test_send_command(pane):
