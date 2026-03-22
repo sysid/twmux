@@ -1,5 +1,5 @@
-<p align="center">
-  <img src="docs/logo_264x264.png" alt="twmux logo" width="200">
+<p align="left">
+  <img src="docs/twmux-logo.png" alt="twmux logo" width="300" />
 </p>
 
 Race-condition-safe **tmux** wrapper for coding agents.
