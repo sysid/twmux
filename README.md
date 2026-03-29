@@ -2,23 +2,34 @@
   <img src="docs/twmux-logo.png" alt="twmux logo" width="300" />
 </p>
 
-Race-condition-safe **tmux** wrapper for coding agents.
+Race-condition-safe **tmux** wrapper built for LLM coding agents — but equally pleasant for humans.
+
+## Why twmux?
+
+LLM agents need to run shell commands, but raw tmux is fragile:
+Enter keys get lost, output parsing breaks, errors produce tracebacks instead of structured data.
+twmux solves this with race-condition-safe I/O, a consistent JSON contract, and agent-safe socket isolation.
+
+**For agents:** Every command returns `{"ok": true, ...}` or `{"ok": false, "error": "..."}`. No tracebacks. No Rich markup in JSON. Predictable exit codes. Self-discoverable via `twmux --json`.
+
+**For humans:** Rich-formatted output, helpful error messages, monitor commands for watching agent work. The `--json` flag is opt-in; without it, everything is human-friendly.
 
 ## Features
 
+- **Structured JSON contract** - Consistent `{"ok": true/false, ...}` envelope for all commands, errors included
 - **Agent isolation** - Default socket `claude` keeps agent operations separate from user tmux
 - **Safety boundaries** - Non-agent sockets require `--force` flag
-- **Session lifecycle** - Create, monitor, and clean up sessions easily
 - **Race-condition-safe send** - Verifies commands are received before sending Enter
 - **Execute and capture** - Run commands and get output with exit codes
 - **Marker-based execution** - Reliable output capture using unique markers
 - **Wait-idle detection** - Wait until pane output stabilizes
-- **JSON output** - Programmatic interface for all commands
+- **Self-discoverable** - `twmux --json` lists all commands; `twmux --json status` exposes all targets
 - **Flexible targeting** - Pane IDs or session:window.pane syntax
-- **Pane management** - Launch, kill, interrupt, and escape
+- **Pane management** - Launch, kill, interrupt, move, and escape
 - **Cross-session moves** - Move panes and windows between sessions
+- **Zero tracebacks** - All errors are caught and formatted, even connection failures
 
-Nothing you couldn't do with bare "tmux" skill, but much more reliable with agent use.
+Nothing you couldn't do with bare tmux, but much more reliable for agent use.
 
 ## Agent Isolation
 
@@ -144,7 +155,7 @@ twmux move-pane -t %5 debug:0         # Join window 0 in "debug"
 twmux --json move-pane -t %5 debug    # JSON output
 ```
 
-Returns: `{"pane_id": "%5", "destination_session": "debug", "new_window": true}`
+Returns: `{"ok": true, "pane_id": "%5", "destination_session": "debug", "new_window": true}`
 
 ### move-window - Move window to another session
 
@@ -156,7 +167,7 @@ twmux move-window -t %5 debug            # Move window containing %5
 twmux --json move-window -t build:0 debug # JSON output
 ```
 
-Returns: `{"window_id": "@1", "window_index": "1", "pane_ids": ["%2", "%3"], "destination_session": "debug"}`
+Returns: `{"ok": true, "window_id": "@1", "window_index": "1", "pane_ids": ["%2", "%3"], "destination_session": "debug"}`
 
 ### new - Create session
 
@@ -247,7 +258,7 @@ twmux send -t :0.1 "echo hello"        # First session, window 0, pane 1
 ```bash
 # Start a REPL in a new pane and interact with it
 twmux launch -t %5 -c "python3"
-# Returns: {"pane_id": "%12"}
+# Returns: {"ok": true, "pane_id": "%12"}
 
 # Send commands to the new pane
 twmux send -t %12 "print('hello')"
@@ -258,7 +269,7 @@ twmux capture -t %12 -n 10
 
 # Execute and get result
 twmux --json exec -t %12 "print(1+1)"
-# Returns: {"output": "2", "exit_code": 0, "timed_out": false}
+# Returns: {"ok": true, "output": "2", "exit_code": 0, "timed_out": false}
 
 # Clean up
 twmux kill -t %12
@@ -266,20 +277,33 @@ twmux kill -t %12
 
 ## JSON Output
 
-All commands support `--json` for programmatic use:
+All commands support `--json` for programmatic use. Every response follows a consistent envelope:
+
+```
+Success: {"ok": true,  ...command-specific-fields}
+Error:   {"ok": false, "error": "human-readable message"}
+```
+
+Exit codes: `0` = success, `1` = any error. All JSON goes to stdout.
+
+### Examples
 
 ```bash
 $ twmux --json exec -t %5 "echo hello"
-{"output": "hello", "exit_code": 0, "timed_out": false}
+{"ok": true, "output": "hello", "exit_code": 0, "timed_out": false}
 
 $ twmux --json send -t %5 "test"
-{"success": true, "attempts": 1}
+{"ok": true, "success": true, "attempts": 1}
+
+$ twmux --json send -t %999 "test"
+{"ok": false, "error": "Pane not found: %999"}
 
 $ twmux --json new myapp
-{"session": "myapp", "socket": "claude", "pane_id": "%0", "monitor_cmd": "tmux -L claude attach -t myapp"}
+{"ok": true, "session": "myapp", "socket": "claude", "pane_id": "%0", "monitor_cmd": "tmux -L claude attach -t myapp"}
 
 $ twmux --json status
 {
+  "ok": true,
   "sockets": [
     {
       "socket": "claude",
@@ -293,6 +317,45 @@ $ twmux --json status
     }
   ]
 }
+```
+
+### Agent Self-Discovery
+
+An agent encountering twmux for the first time can bootstrap itself:
+
+```bash
+# Discover available commands
+$ twmux --json
+{"ok": true, "commands": [{"name": "send", "description": "..."}, ...]}
+
+# Discover available targets
+$ twmux --json status
+{"ok": true, "sockets": [{"sessions": [{"session_name": "myapp", "windows": [{"panes": [{"pane_id": "%0"}]}]}]}]}
+
+# Use discovered target
+$ twmux --json send -t %0 "echo hello"
+{"ok": true, "success": true, "attempts": 1}
+```
+
+### Agent Integration Pattern
+
+```python
+import json, subprocess
+
+def twmux(cmd: list[str]) -> dict:
+    result = subprocess.run(
+        ["twmux", "--json"] + cmd,
+        capture_output=True, text=True,
+    )
+    response = json.loads(result.stdout)
+    if not response["ok"]:
+        raise RuntimeError(response["error"])
+    return response
+
+# One parser for all commands
+twmux(["send", "-t", "%0", "make test"])
+twmux(["wait-idle", "-t", "%0"])
+output = twmux(["capture", "-t", "%0"])["content"]
 ```
 
 ## How It Works

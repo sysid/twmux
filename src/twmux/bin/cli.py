@@ -34,7 +34,7 @@ force_socket: bool = False
 def print_version() -> None:
     """Print version information."""
     if json_output:
-        print(json_lib.dumps({"version": __version__}))
+        output_result({"version": __version__})
     else:
         print(f"twmux {__version__}")
 
@@ -62,6 +62,14 @@ def main(
         if version:
             print_version()
             raise typer.Exit(0)
+        if json_output:
+            # Machine-discoverable command listing for agents
+            commands = []
+            for name in sorted(ctx.command.list_commands(ctx)):
+                cmd = ctx.command.get_command(ctx, name)
+                commands.append({"name": name, "description": (cmd.help or "").split("\n")[0]})
+            output_result({"commands": commands})
+            raise typer.Exit(0)
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
 
@@ -69,15 +77,23 @@ def main(
     try:
         validate_socket(socket_name, force_socket)
     except SocketValidationError as e:
-        rprint(f"[red]Error:[/red] {e}")
+        error_result(str(e))
         raise typer.Exit(1)
 
 
 def get_pane(target: str):
-    """Resolve target to libtmux Pane object."""
+    """Resolve target to libtmux Pane object.
+
+    Uses error_result() for all error paths, ensuring JSON-compatible errors
+    when --json is active. Raises typer.Exit(1) on any resolution failure.
+    """
     from libtmux import Server
 
-    server = Server(socket_name=socket_name)
+    try:
+        server = Server(socket_name=socket_name)
+    except Exception as e:
+        error_result(f"Cannot connect to tmux server on socket '{socket_name}': {e}")
+        raise typer.Exit(1)
 
     # Handle pane ID directly (e.g., %5)
     if target.startswith("%"):
@@ -86,7 +102,8 @@ def get_pane(target: str):
                 for pane in window.panes:
                     if pane.pane_id == target:
                         return pane
-        raise typer.BadParameter(f"Pane not found: {target}")
+        error_result(f"Pane not found: {target}")
+        raise typer.Exit(1)
 
     # Handle session:window.pane format
     parts = target.split(":")
@@ -96,32 +113,57 @@ def get_pane(target: str):
     if session_name:
         sessions = [s for s in server.sessions if s.session_name == session_name]
         if not sessions:
-            raise typer.BadParameter(f"Session not found: {session_name}")
+            error_result(f"Session not found: {session_name}")
+            raise typer.Exit(1)
         session = sessions[0]
     else:
         session = server.sessions[0] if server.sessions else None
         if not session:
-            raise typer.BadParameter("No tmux sessions found")
+            error_result("No tmux sessions found")
+            raise typer.Exit(1)
 
     # Parse window.pane
     if len(parts) > 1 and parts[1]:
-        window_pane = parts[1].split(".")
-        window_idx = int(window_pane[0]) if window_pane[0] else 0
-        pane_idx = int(window_pane[1]) if len(window_pane) > 1 else 0
-
-        window = session.windows[window_idx]
-        return window.panes[pane_idx]
+        try:
+            window_pane = parts[1].split(".")
+            window_idx = int(window_pane[0]) if window_pane[0] else 0
+            pane_idx = int(window_pane[1]) if len(window_pane) > 1 else 0
+            window = session.windows[window_idx]
+            return window.panes[pane_idx]
+        except (ValueError, IndexError) as e:
+            error_result(f"Invalid target '{target}': {e}")
+            raise typer.Exit(1)
 
     return session.active_window.active_pane
 
 
 def output_result(data: dict) -> None:
-    """Output result in appropriate format."""
+    """Output result in appropriate format.
+
+    JSON mode: injects ok=True into the response envelope.
+    Human mode: prints key: value pairs with Rich formatting.
+    """
     if json_output:
-        print(json_lib.dumps(data))
+        print(json_lib.dumps({"ok": True, **data}))
     else:
         for key, value in data.items():
             rprint(f"{key}: {value}")
+
+
+def error_result(msg: str) -> None:
+    """Output error in appropriate format.
+
+    JSON mode: emits {"ok": false, "error": msg} to stdout, stripping Rich markup.
+    Human mode: prints Rich-formatted error to stdout.
+    """
+    if json_output:
+        # Strip Rich markup from message for clean JSON
+        from rich.text import Text
+
+        clean_msg = Text.from_markup(msg).plain if "[" in msg else msg
+        print(json_lib.dumps({"ok": False, "error": clean_msg}))
+    else:
+        rprint(f"[red]Error:[/red] {msg}")
 
 
 def resolve_destination(server, destination: str):
@@ -135,10 +177,7 @@ def resolve_destination(server, destination: str):
 
     sessions = [s for s in server.sessions if s.session_name == session_name]
     if not sessions:
-        if json_output:
-            print(json_lib.dumps({"error": f"Session not found: {session_name}"}))
-        else:
-            rprint(f"[red]Error:[/red] Session not found: {session_name}")
+        error_result(f"Session not found: {session_name}")
         raise typer.Exit(1)
 
     dest_session = sessions[0]
@@ -173,7 +212,8 @@ def send(
     Sends text, waits, then sends Enter and verifies the pane content changed.
     Retries Enter if verification fails (solves the "lost Enter" problem).
 
-    JSON: {"success": bool, "attempts": int}
+    JSON: {"ok": true, "success": bool, "attempts": int}
+    Error: {"ok": false, "error": str}
     Exit: 0 if sent, 1 if Enter verification failed after retries.
     """
     from twmux.lib.safe_input import send_safe
@@ -212,7 +252,7 @@ def exec_cmd(
     markers. Use for commands that produce output and terminate. Check
     exit_code and timed_out in output to determine success.
 
-    JSON: {"output": str, "exit_code": int, "timed_out": bool}
+    JSON: {"ok": true, "output": str, "exit_code": int, "timed_out": bool}
     Exit: Always 0 (check exit_code/timed_out in JSON for command result).
     """
     from twmux.lib.execution import execute
@@ -251,7 +291,7 @@ def capture(
     Returns text currently displayed in the pane's visible area.
     Use -n to limit to last N lines (useful for long outputs).
 
-    JSON: {"content": [str, ...]}
+    JSON: {"ok": true, "content": [str, ...]}
     Exit: Always 0.
     """
     pane = get_pane(target)
@@ -262,7 +302,7 @@ def capture(
         content = pane.capture_pane()
 
     if json_output:
-        print(json_lib.dumps({"content": content}))
+        output_result({"content": content})
     else:
         print("\n".join(content))
 
@@ -294,7 +334,7 @@ def wait_idle(
     Polls pane content at interval, succeeds when consecutive polls return
     identical content. Use after send to wait for command completion.
 
-    JSON: {"idle": bool, "elapsed": float}
+    JSON: {"ok": true, "idle": bool, "elapsed": float}
     Exit: 0 if stabilized, 1 if timeout reached.
     """
     from twmux.lib.safe_input import wait_for_idle
@@ -325,7 +365,7 @@ def interrupt(
     Equivalent to pressing Ctrl+C. Use to cancel long-running commands
     or exit interactive prompts expecting SIGINT.
 
-    JSON: {"interrupted": true}
+    JSON: {"ok": true, "interrupted": true}
     Exit: Always 0.
     """
     pane = get_pane(target)
@@ -359,7 +399,7 @@ def launch(
     Returns new pane ID for use in subsequent commands. Default split is
     horizontal (below); use -v for vertical (right).
 
-    JSON: {"pane_id": str}
+    JSON: {"ok": true, "pane_id": str}
     Exit: Always 0.
     """
     from libtmux.constants import PaneDirection
@@ -391,7 +431,7 @@ def kill(
 
     Immediately kills the pane. Irreversible.
 
-    JSON: {"killed": true}
+    JSON: {"ok": true, "killed": true}
     Exit: Always 0.
     """
     pane = get_pane(target)
@@ -438,7 +478,7 @@ def move_pane(
     existing window. Positioning flags (-b, -h, -f, -l) apply only when
     joining an existing window.
 
-    JSON: {"pane_id": str, "destination_session": str, "new_window": bool}
+    JSON: {"ok": true, "pane_id": str, "destination_session": str, "new_window": bool}
     Exit: 0 success, 1 if same-session or destination not found.
     """
     pane = get_pane(target)
@@ -495,7 +535,7 @@ def escape(
     Useful for exiting vim insert mode, canceling prompts,
     or clearing partial input.
 
-    JSON: {"escaped": true}
+    JSON: {"ok": true, "escaped": true}
     Exit: Always 0.
     """
     pane = get_pane(target)
@@ -518,7 +558,7 @@ def status(
     Lists hierarchy with pane IDs (%N format) for use with -t flag.
     Default shows only the agent socket (claude).
 
-    JSON: {"sockets": [{socket, sessions: [...]}]}
+    JSON: {"ok": true, "sockets": [{socket, sessions: [...]}]}
     Exit: Always 0.
     """
     from libtmux import Server
@@ -575,7 +615,7 @@ def status(
         )
 
     if json_output:
-        print(json_lib.dumps({"sockets": all_data}, indent=2))
+        print(json_lib.dumps({"ok": True, "sockets": all_data}, indent=2))
     else:
         if not all_data:
             rprint(f'No tmux server running on socket "{socket_name}".')
@@ -613,7 +653,7 @@ def new(
     Creates a session on the default socket (claude) or specified socket.
     Prints monitor command for user to attach and observe.
 
-    JSON: {"session": str, "socket": str, "pane_id": str, "monitor_cmd": str}
+    JSON: {"ok": true, "session": str, "socket": str, "pane_id": str, "monitor_cmd": str}
     Exit: 0 success, 1 if session already exists.
     """
     from libtmux import Server
@@ -624,23 +664,14 @@ def new(
     # Check if session already exists
     existing = [s for s in server.sessions if s.session_name == session_name]
     if existing:
-        if json_output:
-            print(json_lib.dumps({"error": f"Session '{session_name}' already exists"}))
-        else:
-            rprint(
-                f"[red]Error:[/red] Session '{session_name}' already exists "
-                f"on socket '{socket_name}'"
-            )
+        error_result(f"Session '{session_name}' already exists on socket '{socket_name}'")
         raise typer.Exit(1)
 
     # Create session
     try:
         session = server.new_session(session_name=session_name)
     except LibTmuxException as e:
-        if json_output:
-            print(json_lib.dumps({"error": str(e)}))
-        else:
-            rprint(f"[red]Error:[/red] {e}")
+        error_result(str(e))
         raise typer.Exit(1)
 
     pane = session.active_window.active_pane
@@ -652,15 +683,13 @@ def new(
     monitor_cmd = f"tmux -L {socket_name} attach -t {session_name}"
 
     if json_output:
-        print(
-            json_lib.dumps(
-                {
-                    "session": session_name,
-                    "socket": socket_name,
-                    "pane_id": pane.pane_id,
-                    "monitor_cmd": monitor_cmd,
-                }
-            )
+        output_result(
+            {
+                "session": session_name,
+                "socket": socket_name,
+                "pane_id": pane.pane_id,
+                "monitor_cmd": monitor_cmd,
+            }
         )
     else:
         rprint(f"Session created: [bold]{session_name}[/bold] on socket [bold]{socket_name}[/bold]")
@@ -685,7 +714,7 @@ def kill_session_cmd(
 
     Removes the specified session from the socket.
 
-    JSON: {"killed": true, "socket": str, "session": str}
+    JSON: {"ok": true, "killed": true, "socket": str, "session": str}
     Exit: 0 success, 1 if session not found.
     """
     from libtmux import Server
@@ -695,25 +724,18 @@ def kill_session_cmd(
     # Find session
     sessions = [s for s in server.sessions if s.session_name == session_name]
     if not sessions:
-        if json_output:
-            print(json_lib.dumps({"error": f"Session '{session_name}' not found"}))
-        else:
-            rprint(
-                f"[red]Error:[/red] Session '{session_name}' not found on socket '{socket_name}'"
-            )
+        error_result(f"Session '{session_name}' not found on socket '{socket_name}'")
         raise typer.Exit(1)
 
     sessions[0].kill()
 
     if json_output:
-        print(
-            json_lib.dumps(
-                {
-                    "killed": True,
-                    "socket": socket_name,
-                    "session": session_name,
-                }
-            )
+        output_result(
+            {
+                "killed": True,
+                "socket": socket_name,
+                "session": session_name,
+            }
         )
     else:
         rprint(f"Killed session [bold]{session_name}[/bold] on socket [bold]{socket_name}[/bold]")
@@ -734,7 +756,7 @@ def kill_server_cmd() -> None:
     Terminates the tmux server and all its sessions.
     Only operates on agent sockets (claude*) unless --force is used.
 
-    JSON: {"killed": true, "socket": str}
+    JSON: {"ok": true, "killed": true, "socket": str}
     Exit: 0 success, 1 if no server running.
     """
     from libtmux import Server
@@ -742,22 +764,17 @@ def kill_server_cmd() -> None:
     server = Server(socket_name=socket_name)
 
     if not server.sessions:
-        if json_output:
-            print(json_lib.dumps({"error": f"No server running on socket '{socket_name}'"}))
-        else:
-            rprint(f"[red]Error:[/red] No server running on socket '{socket_name}'")
+        error_result(f"No server running on socket '{socket_name}'")
         raise typer.Exit(1)
 
     server.kill()
 
     if json_output:
-        print(
-            json_lib.dumps(
-                {
-                    "killed": True,
-                    "socket": socket_name,
-                }
-            )
+        output_result(
+            {
+                "killed": True,
+                "socket": socket_name,
+            }
         )
     else:
         rprint(f"Killed server on socket [bold]{socket_name}[/bold]")
@@ -783,7 +800,8 @@ def move_window(
     Moves the entire window (with all panes) to the destination session.
     Target identifies a pane in the window to move.
 
-    JSON: {"window_id": str, "window_index": str, "pane_ids": [str], "destination_session": str}
+    JSON: {"ok": true, "window_id": str, "window_index": str,
+           "pane_ids": [str], "destination_session": str}
     Exit: 0 success, 1 if same-session or destination not found.
     """
     pane = get_pane(target)

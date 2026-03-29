@@ -1,6 +1,7 @@
 """Tests for CLI."""
 
 import json
+import re
 import time
 
 from typer.testing import CliRunner
@@ -8,6 +9,28 @@ from typer.testing import CliRunner
 from twmux.bin.cli import app
 
 runner = CliRunner()
+
+
+# --- Test helpers for JSON envelope validation (T001, T002) ---
+
+
+def assert_json_success(result):
+    """Validate JSON success envelope: ok=True, exit code 0."""
+    assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+    data = json.loads(result.output)
+    assert data.get("ok") is True, f"Expected ok=True: {data}"
+    return data
+
+
+def assert_json_error(result, expected_msg=None):
+    """Validate JSON error envelope: ok=False, exit code 1."""
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}: {result.output}"
+    data = json.loads(result.output)
+    assert data.get("ok") is False, f"Expected ok=False: {data}"
+    assert "error" in data, f"Expected 'error' field: {data}"
+    if expected_msg:
+        assert expected_msg in data["error"], f"Expected '{expected_msg}' in: {data['error']}"
+    return data
 
 
 def test_version_flag():
@@ -929,3 +952,265 @@ class TestStatusEnhanced:
         # Cleanup
         Server(socket_name="claude").kill()
         non_agent.kill()
+
+
+class TestJsonEnvelope:
+    """Test JSON envelope contract: ok field, error format, exit codes.
+
+    Tests organized by user story:
+    - Foundational: error_result behavior
+    - US1+US2: Error paths produce JSON errors with exit code 1
+    - US3: Success paths include ok: true
+    - US4: Machine-discoverable help
+    """
+
+    # --- Foundational: error_result strips Rich markup ---
+
+    def test_error_json_has_no_rich_markup(self):
+        """JSON error messages must not contain Rich markup tags."""
+        result = runner.invoke(app, ["-L", "default", "--json", "status"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        # No Rich markup tags like [red], [bold], etc.
+        assert not re.search(r"\[/?[a-z]+.*?\]", data["error"]), (
+            f"Rich markup in error: {data['error']}"
+        )
+
+    # --- US1+US2: Error paths produce JSON errors with exit code 1 ---
+
+    def test_send_bad_target_json_error(self, session):
+        """send with invalid target returns JSON error envelope."""
+        socket_name = session.server.socket_name
+        result = runner.invoke(
+            app, ["-L", socket_name, "--force", "--json", "send", "-t", "%999", "test"]
+        )
+        assert_json_error(result, "Pane not found: %999")
+
+    def test_capture_bad_target_json_error(self, session):
+        """capture with invalid target returns JSON error envelope."""
+        socket_name = session.server.socket_name
+        result = runner.invoke(
+            app, ["-L", socket_name, "--force", "--json", "capture", "-t", "%999"]
+        )
+        assert_json_error(result, "Pane not found: %999")
+
+    def test_interrupt_bad_target_json_error(self, session):
+        """interrupt with invalid target returns JSON error envelope."""
+        socket_name = session.server.socket_name
+        result = runner.invoke(
+            app, ["-L", socket_name, "--force", "--json", "interrupt", "-t", "%999"]
+        )
+        assert_json_error(result, "Pane not found: %999")
+
+    def test_new_duplicate_json_error(self):
+        """new with existing session returns JSON error envelope."""
+        from libtmux import Server
+
+        runner.invoke(app, ["-L", "claude-test-envdup", "new", "dup"])
+        try:
+            result = runner.invoke(app, ["-L", "claude-test-envdup", "--json", "new", "dup"])
+            assert_json_error(result, "already exists")
+        finally:
+            Server(socket_name="claude-test-envdup").kill()
+
+    def test_kill_session_nonexistent_json_error(self):
+        """kill-session with nonexistent session returns JSON error envelope."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-envkill")
+        server.new_session("other")
+        try:
+            result = runner.invoke(
+                app, ["-L", "claude-test-envkill", "--json", "kill-session", "nonexistent"]
+            )
+            assert_json_error(result, "not found")
+        finally:
+            server.kill()
+
+    def test_kill_server_no_server_json_error(self):
+        """kill-server with no server returns JSON error envelope."""
+        result = runner.invoke(app, ["-L", "claude-test-noserver", "--json", "kill-server"])
+        # Server might not exist or have no sessions — either way should be JSON error
+        assert_json_error(result)
+
+    def test_socket_validation_json_error(self):
+        """Non-agent socket with --json returns JSON error envelope."""
+        result = runner.invoke(app, ["-L", "default", "--json", "status"])
+        assert_json_error(result, "not an agent socket")
+
+    def test_resolve_destination_json_error(self):
+        """move-pane to nonexistent session with --json returns JSON error envelope."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-envdest")
+        session = server.new_session("source")
+        pane_id = session.active_window.active_pane.pane_id
+        try:
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-envdest",
+                    "--force",
+                    "--json",
+                    "move-pane",
+                    "-t",
+                    pane_id,
+                    "nonexistent",
+                ],
+            )
+            assert_json_error(result, "Session not found")
+        finally:
+            server.kill()
+
+    # --- US3: Success paths include ok: true ---
+
+    def test_send_success_has_ok(self, pane):
+        """send success response includes ok: true."""
+        time.sleep(0.3)
+        result = runner.invoke(
+            app,
+            [
+                "-L",
+                pane.server.socket_name,
+                "--force",
+                "--json",
+                "send",
+                "-t",
+                pane.pane_id,
+                "echo ok_test",
+            ],
+        )
+        data = assert_json_success(result)
+        assert "success" in data
+        assert "attempts" in data
+
+    def test_capture_success_has_ok(self, pane):
+        """capture success response includes ok: true."""
+        result = runner.invoke(
+            app,
+            ["-L", pane.server.socket_name, "--force", "--json", "capture", "-t", pane.pane_id],
+        )
+        data = assert_json_success(result)
+        assert "content" in data
+
+    def test_status_success_has_ok(self, session):
+        """status success response includes ok: true."""
+        result = runner.invoke(
+            app, ["-L", session.server.socket_name, "--force", "--json", "status"]
+        )
+        data = assert_json_success(result)
+        assert "sockets" in data
+
+    def test_new_success_has_ok(self):
+        """new success response includes ok: true."""
+        from libtmux import Server
+
+        result = runner.invoke(app, ["-L", "claude-test-envnew", "--json", "new", "test-ok"])
+        try:
+            data = assert_json_success(result)
+            assert data["session"] == "test-ok"
+            assert "pane_id" in data
+        finally:
+            Server(socket_name="claude-test-envnew").kill()
+
+    def test_kill_session_success_has_ok(self):
+        """kill-session success response includes ok: true."""
+        from libtmux import Server
+
+        runner.invoke(app, ["-L", "claude-test-envks", "new", "to-kill"])
+        result = runner.invoke(
+            app, ["-L", "claude-test-envks", "--json", "kill-session", "to-kill"]
+        )
+        data = assert_json_success(result)
+        assert data["killed"] is True
+        Server(socket_name="claude-test-envks").kill()
+
+    def test_kill_server_success_has_ok(self):
+        """kill-server success response includes ok: true."""
+        runner.invoke(app, ["-L", "claude-test-envkss", "new", "s1"])
+        result = runner.invoke(app, ["-L", "claude-test-envkss", "--json", "kill-server"])
+        data = assert_json_success(result)
+        assert data["killed"] is True
+
+    def test_version_json_has_ok(self):
+        """--json --version includes ok: true."""
+        result = runner.invoke(app, ["--json", "--version"])
+        data = assert_json_success(result)
+        assert "version" in data
+
+    def test_interrupt_success_has_ok(self, pane):
+        """interrupt success response includes ok: true."""
+        result = runner.invoke(
+            app,
+            ["-L", pane.server.socket_name, "--force", "--json", "interrupt", "-t", pane.pane_id],
+        )
+        data = assert_json_success(result)
+        assert data["interrupted"] is True
+
+    def test_escape_success_has_ok(self, pane):
+        """escape success response includes ok: true."""
+        result = runner.invoke(
+            app,
+            ["-L", pane.server.socket_name, "--force", "--json", "escape", "-t", pane.pane_id],
+        )
+        data = assert_json_success(result)
+        assert data["escaped"] is True
+
+    def test_wait_idle_success_has_ok(self, pane):
+        """wait-idle success response includes ok: true."""
+        time.sleep(0.3)
+        result = runner.invoke(
+            app,
+            [
+                "-L",
+                pane.server.socket_name,
+                "--force",
+                "--json",
+                "wait-idle",
+                "-t",
+                pane.pane_id,
+                "--timeout",
+                "2",
+            ],
+        )
+        data = assert_json_success(result)
+        assert data["idle"] is True
+
+    def test_launch_success_has_ok(self, session):
+        """launch success response includes ok: true."""
+        pane = session.active_window.active_pane
+        result = runner.invoke(
+            app,
+            ["-L", session.server.socket_name, "--force", "--json", "launch", "-t", pane.pane_id],
+        )
+        data = assert_json_success(result)
+        assert "pane_id" in data
+
+    # --- US4: Machine-discoverable help ---
+
+    def test_status_has_pane_details_for_agent(self, session):
+        """status JSON has session_name, window_index, pane_id — enough for -t targets."""
+        result = runner.invoke(
+            app, ["-L", session.server.socket_name, "--force", "--json", "status"]
+        )
+        data = assert_json_success(result)
+        socket_data = data["sockets"][0]
+        session_data = socket_data["sessions"][0]
+        window_data = session_data["windows"][0]
+        pane_data = window_data["panes"][0]
+
+        assert "session_name" in session_data
+        assert "window_index" in window_data
+        assert "pane_id" in pane_data
+
+    def test_no_subcommand_json_lists_commands(self):
+        """twmux --json with no subcommand returns command listing."""
+        result = runner.invoke(app, ["--json"])
+        data = assert_json_success(result)
+        assert "commands" in data
+        command_names = [c["name"] for c in data["commands"]]
+        assert "send" in command_names
+        assert "status" in command_names
+        assert "exec" in command_names
