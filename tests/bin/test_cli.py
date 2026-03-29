@@ -419,15 +419,17 @@ class TestMovePaneCommand:
         finally:
             server.kill()
 
-    def test_move_pane_same_session_error(self):
-        """T002: move-pane to same session returns error."""
+    def test_move_pane_same_session(self):
+        """T002: move-pane within same session creates new window (matches tmux behavior)."""
         from libtmux import Server
 
         server = Server(socket_name="claude-test-mvpane2")
         try:
-            server.new_session("source")
-            pane = server.sessions[0].active_window.active_pane
-            pane_id = pane.pane_id
+            src_session = server.new_session("source")
+            # Need 2 panes so source window survives
+            src_pane = src_session.active_window.active_pane.split()
+            pane_id = src_pane.pane_id
+            windows_before = len(src_session.windows)
 
             args = [
                 "-L",
@@ -440,10 +442,14 @@ class TestMovePaneCommand:
                 "source",
             ]
             result = runner.invoke(app, args)
-            assert result.exit_code == 1
+            assert result.exit_code == 0, f"Failed: {result.output}"
 
             data = json.loads(result.output)
-            assert "error" in data
+            assert data["new_window"] is True
+
+            # Pane moved to a new window in same session
+            src_session_fresh = [s for s in server.sessions if s.session_name == "source"][0]
+            assert len(src_session_fresh.windows) == windows_before + 1
         finally:
             server.kill()
 
@@ -769,14 +775,14 @@ class TestMoveWindowCommand:
         finally:
             server.kill()
 
-    def test_move_window_same_session_error(self):
-        """T009: move-window to same session returns error."""
+    def test_move_window_same_session(self):
+        """T009: move-window within same session succeeds (matches tmux behavior)."""
         from libtmux import Server
 
         server = Server(socket_name="claude-test-mvwin2")
         try:
-            server.new_session("source")
-            pane = server.sessions[0].active_window.active_pane
+            src_session = server.new_session("source")
+            pane = src_session.active_window.active_pane
             pane_id = pane.pane_id
 
             result = runner.invoke(
@@ -792,10 +798,10 @@ class TestMoveWindowCommand:
                     "source",
                 ],
             )
-            assert result.exit_code == 1
+            assert result.exit_code == 0, f"Failed: {result.output}"
 
             data = json.loads(result.output)
-            assert "error" in data
+            assert data["destination_session"] == "source"
         finally:
             server.kill()
 

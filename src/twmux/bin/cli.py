@@ -124,11 +124,10 @@ def output_result(data: dict) -> None:
             rprint(f"{key}: {value}")
 
 
-def resolve_destination(server, destination: str, source_session_name: str, source_desc: str):
+def resolve_destination(server, destination: str):
     """Parse destination and find target session.
 
     Returns (session, window_spec) or emits error and raises typer.Exit(1).
-    source_desc: e.g. "pane %5" for error messages.
     """
     parts = destination.split(":", 1)
     session_name = parts[0]
@@ -143,17 +142,6 @@ def resolve_destination(server, destination: str, source_session_name: str, sour
         raise typer.Exit(1)
 
     dest_session = sessions[0]
-
-    if dest_session.session_name == source_session_name:
-        if json_output:
-            print(
-                json_lib.dumps(
-                    {"error": f"{source_desc} is already in session '{source_session_name}'"}
-                )
-            )
-        else:
-            rprint(f"[red]Error:[/red] {source_desc} is already in session '{source_session_name}'")
-        raise typer.Exit(1)
 
     return dest_session, window_spec
 
@@ -415,6 +403,7 @@ def kill(
 @app.command(
     name="move-pane",
     rich_help_panel="Pane Management",
+    context_settings={"help_option_names": ["--help"]},
     epilog="""
 [bold]Examples[/bold]
   twmux move-pane -t %5 debug           # New window in "debug"
@@ -453,11 +442,7 @@ def move_pane(
     Exit: 0 success, 1 if same-session or destination not found.
     """
     pane = get_pane(target)
-    source_session_name = pane.window.session.session_name
-
-    dest_session, window_spec = resolve_destination(
-        pane.server, destination, source_session_name, f"pane {pane.pane_id}"
-    )
+    dest_session, window_spec = resolve_destination(pane.server, destination)
 
     if window_spec is not None:
         # join-pane: move pane into existing window
@@ -599,7 +584,7 @@ def status(
 
         for socket_data in all_data:
             sock = socket_data["socket"]
-            rprint(f"[bold cyan][{sock}][/bold cyan]")
+            rprint(f"[bold cyan]\\[{sock}][/bold cyan]")
             for s in socket_data["sessions"]:
                 rprint(f"  [bold]{s['session_name']}[/bold] ({s['session_id']})")
                 for w in s["windows"]:
@@ -803,11 +788,8 @@ def move_window(
     """
     pane = get_pane(target)
     window = pane.window
-    source_session_name = window.session.session_name
 
-    dest_session, _window_spec = resolve_destination(
-        pane.server, destination, source_session_name, f"window {window.window_id}"
-    )
+    dest_session, _window_spec = resolve_destination(pane.server, destination)
 
     window.move_window(session=dest_session.session_id)
 
