@@ -561,6 +561,160 @@ class TestMovePaneCommand:
         finally:
             server.kill()
 
+    def test_move_pane_horizontal_before(self):
+        """T014: move-pane with -b -h joins pane left of target (horizontal, before)."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane6")
+        try:
+            src_session = server.new_session("source")
+            dst_session = server.new_session("dest")
+
+            # Split source so it survives
+            src_pane = src_session.active_window.active_pane.split()
+            pane_id = src_pane.pane_id
+
+            dst_window = dst_session.windows[0]
+            dst_win_idx = dst_window.window_index
+            panes_before = len(dst_window.panes)
+
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-mvpane6",
+                    "--force",
+                    "--json",
+                    "move-pane",
+                    "-t",
+                    pane_id,
+                    "-b",
+                    "-h",
+                    f"dest:{dst_win_idx}",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            assert data["new_window"] is False
+
+            # Verify pane joined destination window
+            dst_window_fresh = [w for w in server.sessions if w.session_name == "dest"][0].windows[
+                0
+            ]
+            assert len(dst_window_fresh.panes) == panes_before + 1
+        finally:
+            server.kill()
+
+    def test_move_pane_full_flag(self):
+        """T015: move-pane with -f creates spanning pane."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane7")
+        try:
+            src_session = server.new_session("source")
+            dst_session = server.new_session("dest")
+
+            src_pane = src_session.active_window.active_pane.split()
+            pane_id = src_pane.pane_id
+
+            dst_window = dst_session.windows[0]
+            dst_win_idx = dst_window.window_index
+
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-mvpane7",
+                    "--force",
+                    "--json",
+                    "move-pane",
+                    "-t",
+                    pane_id,
+                    "-f",
+                    f"dest:{dst_win_idx}",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            assert data["new_window"] is False
+        finally:
+            server.kill()
+
+    def test_move_pane_size_flag(self):
+        """T016: move-pane with -l sets pane size."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane8")
+        try:
+            src_session = server.new_session("source")
+            dst_session = server.new_session("dest")
+
+            src_pane = src_session.active_window.active_pane.split()
+            pane_id = src_pane.pane_id
+
+            dst_window = dst_session.windows[0]
+            dst_win_idx = dst_window.window_index
+
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-mvpane8",
+                    "--force",
+                    "--json",
+                    "move-pane",
+                    "-t",
+                    pane_id,
+                    "-h",
+                    "-l",
+                    "50%",
+                    f"dest:{dst_win_idx}",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            assert data["new_window"] is False
+        finally:
+            server.kill()
+
+    def test_move_pane_flags_ignored_for_new_window(self):
+        """T017: positioning flags are silently ignored when creating a new window."""
+        from libtmux import Server
+
+        server = Server(socket_name="claude-test-mvpane9")
+        try:
+            src_session = server.new_session("source")
+            server.new_session("dest")
+
+            src_pane = src_session.active_window.active_pane.split()
+            pane_id = src_pane.pane_id
+
+            result = runner.invoke(
+                app,
+                [
+                    "-L",
+                    "claude-test-mvpane9",
+                    "--force",
+                    "--json",
+                    "move-pane",
+                    "-t",
+                    pane_id,
+                    "-b",
+                    "-h",
+                    "-f",
+                    "dest",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed: {result.output}"
+
+            data = json.loads(result.output)
+            assert data["new_window"] is True
+        finally:
+            server.kill()
+
 
 class TestMoveWindowCommand:
     """Test twmux move-window command."""

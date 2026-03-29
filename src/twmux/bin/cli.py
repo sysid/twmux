@@ -419,6 +419,9 @@ def kill(
 [bold]Examples[/bold]
   twmux move-pane -t %5 debug           # New window in "debug"
   twmux move-pane -t %5 debug:0         # Join window 0 in "debug"
+  twmux move-pane -t %5 debug:0 -b -h   # Join left of window 0, horizontal
+  twmux move-pane -t %5 debug:0 -h -l 30%  # Horizontal, 30% width
+  twmux move-pane -t %5 debug:0 -f -b   # Full-width, above target
 """,
 )
 def move_pane(
@@ -426,11 +429,25 @@ def move_pane(
     target: Annotated[
         str, typer.Option("-t", "--target", help="Source pane", show_default=True)
     ] = "",
+    before: Annotated[
+        bool, typer.Option("-b", "--before", help="Place pane before (left/above) target")
+    ] = False,
+    horizontal: Annotated[
+        bool, typer.Option("-h", "--horizontal", help="Horizontal (side-by-side) split")
+    ] = False,
+    full: Annotated[
+        bool, typer.Option("-f", "--full", help="Use full window width/height")
+    ] = False,
+    size: Annotated[
+        str | None,
+        typer.Option("-l", "--size", help="Pane size: lines/columns or %% (e.g. '30%%')"),
+    ] = None,
 ) -> None:
     """Move pane to another session.
 
     Session-only destination creates a new window. Session:window joins
-    existing window.
+    existing window. Positioning flags (-b, -h, -f, -l) apply only when
+    joining an existing window.
 
     JSON: {"pane_id": str, "destination_session": str, "new_window": bool}
     Exit: 0 success, 1 if same-session or destination not found.
@@ -444,14 +461,23 @@ def move_pane(
 
     if window_spec is not None:
         # join-pane: move pane into existing window
-        pane.server.cmd(
+        args = [
             "join-pane",
             "-d",
             "-s",
             pane.pane_id,
             "-t",
             f"{dest_session.session_id}:{window_spec}",
-        )
+        ]
+        if before:
+            args.append("-b")
+        if full:
+            args.append("-f")
+        if horizontal:
+            args.append("-h")
+        if size is not None:
+            args.extend(["-l", size])
+        pane.server.cmd(*args)
         new_window = False
     else:
         # break-pane: move pane to new window in destination session
