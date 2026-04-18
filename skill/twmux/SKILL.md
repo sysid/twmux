@@ -25,7 +25,8 @@ Race-condition-safe tmux wrapper for coding agents. All commands return a consis
 | `exec` | Run shell command | `--timeout` |
 | `capture` | Get pane content | `-n lines` |
 | `wait-idle` | Wait for output stability | `--timeout`, `--interval` |
-| `launch` | Split pane | `-v` vertical, `-c command` |
+| `launch` | Split pane | `-v` vertical, `-c command`, `--exec` (command IS pane PID 1) |
+| `wait-pane` | Block until pane is gone | `--timeout`, `--interval` |
 | `interrupt` | Send Ctrl+C | |
 | `escape` | Send Escape key | |
 | `kill` | Kill pane | |
@@ -187,6 +188,37 @@ twmux --json move-pane -t %6 other-session
 # Move entire window to another session
 twmux --json move-window -t %5 other-session
 ```
+
+### 6. Interactive TUIs and Editors (launch --exec + wait-pane)
+
+For launching an editor or TUI that the user interacts with, then blocking
+until they close it:
+
+```bash
+# Split with the editor as pane's PID 1 (not wrapped in a shell).
+# The pane dies automatically when the editor exits.
+EDITOR_PANE=$(twmux --json launch -t %5 --exec -c "nvim /tmp/draft.md" \
+  | jq -r '.pane_id')
+
+# Block until the user closes the editor.
+twmux wait-pane -t "$EDITOR_PANE"
+# {"ok": true, "gone": true, "elapsed": 42.13}
+
+# Now the saved file is ready to read.
+cat /tmp/draft.md
+```
+
+**When to use `--exec` vs plain `-c`:**
+- Plain `-c "<cmd>"` types the command into a shell — the pane survives the
+  command. Use this for interactive REPLs (Python, psql) where you want to
+  keep sending input.
+- `--exec -c "<cmd>"` makes the command the pane's PID 1 — pane dies on exit.
+  Use this for one-shot TUIs (editors, `less`, `fzf`) where "pane gone" is the
+  signal you need.
+
+`wait-pane` is idempotent: if the pane is already gone when you call it,
+it returns immediately with `elapsed: 0`. Use `--timeout N` to bound the
+wait; default `0` means wait forever.
 
 ## User Communication
 

@@ -207,6 +207,193 @@ def test_escape_command(pane):
     assert data["escaped"] is True
 
 
+def test_launch_exec_pane_dies_on_command_exit(session):
+    """With --exec, command is pane's PID 1, so pane dies when command exits."""
+    socket_name = session.server.socket_name
+    pane_id = session.active_window.active_pane.pane_id
+    initial_count = len(session.active_window.panes)
+
+    result = runner.invoke(
+        app,
+        [
+            "-L",
+            socket_name,
+            "--force",
+            "--json",
+            "launch",
+            "-t",
+            pane_id,
+            "--exec",
+            "-c",
+            "sleep 0.2",
+        ],
+    )
+    data = assert_json_success(result)
+    assert "pane_id" in data
+    new_pane_id = data["pane_id"]
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if not any(p.pane_id == new_pane_id for p in session.server.panes):
+            break
+        time.sleep(0.1)
+    alive = any(p.pane_id == new_pane_id for p in session.server.panes)
+    assert not alive, f"Pane {new_pane_id} still alive after command exit"
+    assert len(session.active_window.panes) == initial_count
+
+
+def test_launch_exec_without_command_errors(session):
+    """--exec without -c/--command is a user error."""
+    socket_name = session.server.socket_name
+    pane_id = session.active_window.active_pane.pane_id
+
+    result = runner.invoke(
+        app,
+        ["-L", socket_name, "--force", "--json", "launch", "-t", pane_id, "--exec"],
+    )
+    assert_json_error(result, "--exec requires")
+
+
+def test_launch_exec_fast_exit_returns_clean_error(session, monkeypatch):
+    """--exec with a command that exits before libtmux can resolve the new pane id.
+
+    The race is inside libtmux's split-window reply parser, so we can't trigger
+    it deterministically by choosing a fast command. Force the exception instead
+    to verify the CLI converts it into a clean JSON error envelope.
+    """
+    from libtmux.exc import TmuxObjectDoesNotExist
+    from libtmux.pane import Pane
+
+    def raise_gone(self, *args, **kwargs):
+        raise TmuxObjectDoesNotExist(
+            obj_key="pane_id", obj_id="%?", list_cmd="list-panes", list_extra_args=None
+        )
+
+    monkeypatch.setattr(Pane, "split", raise_gone)
+
+    socket_name = session.server.socket_name
+    pane_id = session.active_window.active_pane.pane_id
+
+    result = runner.invoke(
+        app,
+        [
+            "-L",
+            socket_name,
+            "--force",
+            "--json",
+            "launch",
+            "-t",
+            pane_id,
+            "--exec",
+            "-c",
+            "true",
+        ],
+    )
+    assert_json_error(result, "command exited before pane")
+
+
+def test_wait_pane_returns_when_pane_dies(session):
+    """wait-pane blocks and returns once the target pane is gone."""
+    socket_name = session.server.socket_name
+    pane_id = session.active_window.active_pane.pane_id
+
+    launch_result = runner.invoke(
+        app,
+        [
+            "-L",
+            socket_name,
+            "--force",
+            "--json",
+            "launch",
+            "-t",
+            pane_id,
+            "--exec",
+            "-c",
+            "sleep 0.3",
+        ],
+    )
+    new_pane_id = assert_json_success(launch_result)["pane_id"]
+
+    start = time.monotonic()
+    result = runner.invoke(
+        app,
+        [
+            "-L",
+            socket_name,
+            "--force",
+            "--json",
+            "wait-pane",
+            "-t",
+            new_pane_id,
+            "--timeout",
+            "5",
+            "--interval",
+            "0.1",
+        ],
+    )
+    elapsed = time.monotonic() - start
+    data = assert_json_success(result)
+    assert data["gone"] is True
+    assert data["elapsed"] < 5
+    assert elapsed < 5
+
+
+def test_wait_pane_missing_pane_is_gone_immediately(session):
+    """A pane id that doesn't exist is reported as gone with elapsed~0."""
+    socket_name = session.server.socket_name
+
+    result = runner.invoke(
+        app,
+        [
+            "-L",
+            socket_name,
+            "--force",
+            "--json",
+            "wait-pane",
+            "-t",
+            "%99999",
+            "--timeout",
+            "5",
+        ],
+    )
+    data = assert_json_success(result)
+    assert data["gone"] is True
+    assert data["elapsed"] < 0.2
+
+
+def test_wait_pane_timeout(session):
+    """A long-lived pane triggers a timeout error."""
+    socket_name = session.server.socket_name
+    pane_id = session.active_window.active_pane.pane_id
+
+    launch_result = runner.invoke(
+        app,
+        ["-L", socket_name, "--force", "--json", "launch", "-t", pane_id],
+    )
+    new_pane_id = assert_json_success(launch_result)["pane_id"]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "-L",
+                socket_name,
+                "--force",
+                "--json",
+                "wait-pane",
+                "-t",
+                new_pane_id,
+                "--timeout",
+                "0.5",
+                "--interval",
+                "0.1",
+            ],
+        )
+        assert_json_error(result, "timeout")
+    finally:
+        runner.invoke(app, ["-L", socket_name, "--force", "kill", "-t", new_pane_id])
+
+
 def test_status_command(session):
     """Show tmux status via CLI."""
     socket_name = session.server.socket_name
