@@ -134,16 +134,35 @@ twmux escape -t %5
 Split current pane to create a new one.
 
 ```bash
-twmux launch -t %5                      # Split below
-twmux launch -t %5 -v                   # Split right (vertical)
-twmux launch -t %5 -c "python3"         # Split and run command
+twmux launch -t %5                           # Split below
+twmux launch -t %5 -v                        # Split right (vertical)
+twmux launch -t %5 -c "python3"              # Split; type command into shell
+twmux launch -t %5 --exec -c "nvim /tmp/x"   # Command IS pane process; pane dies on exit
 ```
+
+With `--exec`, the command replaces the shell as the pane's PID 1. The pane
+terminates automatically when the command exits — pair with `wait-pane` to
+block until an editor or TUI is closed.
 
 ### kill - Kill pane
 
 ```bash
 twmux kill -t %5
 ```
+
+### wait-pane - Block until pane is gone
+
+Polls the tmux server until the target pane no longer exists. Idempotent —
+returns immediately if the pane is already gone.
+
+```bash
+twmux wait-pane -t %5                        # Wait forever
+twmux wait-pane -t %5 --timeout 60           # Error after 60s if still alive
+twmux wait-pane -t %5 --interval 0.1         # Poll every 100ms
+```
+
+Returns: `{"ok": true, "gone": true, "elapsed": 1.23}`. Exits 1 with
+`{"ok": false, "error": "timeout after Ns"}` on timeout.
 
 ### move-pane - Move pane to another session
 

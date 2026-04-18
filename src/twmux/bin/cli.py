@@ -14,14 +14,20 @@ app = typer.Typer(
     help="Race-condition-safe tmux wrapper for coding agents.",
     epilog="""
 [bold]Target Syntax (-t)[/bold]
-  %5           Pane ID (recommended, get via 'twmux status')
-  main:0.1     Session "main", window 0, pane 1
-  main:0       Session "main", window 0, active pane
-  :0.1         First session, window 0, pane 1
-  (empty)      First session, active window/pane
+
+%5           Pane ID (recommended, get via 'twmux status')
+
+main:0.1     Session "main", window 0, pane 1
+
+main:0       Session "main", window 0, active pane
+
+:0.1         First session, window 0, pane 1
+
+(empty)      First session, active window/pane
 
 [bold]JSON Output[/bold]
-  Use --json for programmatic output (all commands).
+
+Use --json for programmatic output (all commands).
 """,
 )
 
@@ -189,9 +195,12 @@ def resolve_destination(server, destination: str):
     rich_help_panel="Core Operations",
     epilog="""
 [bold]Examples[/bold]
-  twmux send -t %5 "echo hello"
-  twmux send -t main:0.1 "make test" --delay 0.1
-  twmux send -t %5 "partial" --no-enter
+
+twmux send -t %5 "echo hello"
+
+twmux send -t main:0.1 "make test" --delay 0.1
+
+twmux send -t %5 "partial" --no-enter
 """,
 )
 def send(
@@ -232,8 +241,10 @@ def send(
     rich_help_panel="Core Operations",
     epilog="""
 [bold]Examples[/bold]
-  twmux exec -t %5 "ls -la"
-  twmux --json exec -t main:0 "make test" --timeout 60
+
+twmux exec -t %5 "ls -la"
+
+twmux --json exec -t main:0 "make test" --timeout 60
 """,
 )
 def exec_cmd(
@@ -273,9 +284,12 @@ def exec_cmd(
     rich_help_panel="Core Operations",
     epilog="""
 [bold]Examples[/bold]
-  twmux capture -t %5
-  twmux capture -t %5 -n 50
-  twmux --json capture -t main:0
+
+twmux capture -t %5
+
+twmux capture -t %5 -n 50
+
+twmux --json capture -t main:0
 """,
 )
 def capture(
@@ -312,8 +326,10 @@ def capture(
     rich_help_panel="Core Operations",
     epilog="""
 [bold]Examples[/bold]
-  twmux wait-idle -t %5
-  twmux wait-idle -t %5 --timeout 10 --interval 0.1
+
+twmux wait-idle -t %5
+
+twmux wait-idle -t %5 --timeout 10 --interval 0.1
 """,
 )
 def wait_idle(
@@ -378,9 +394,14 @@ def interrupt(
     rich_help_panel="Pane Management",
     epilog="""
 [bold]Examples[/bold]
-  twmux launch -t %5                    # Split below (horizontal)
-  twmux launch -t %5 -v                 # Split right (vertical)
-  twmux launch -t %5 -c "python3"       # Split and run command
+
+twmux launch -t %5                          # Split below (horizontal)
+
+twmux launch -t %5 -v                       # Split right (vertical)
+
+twmux launch -t %5 -c "python3"             # Split, run command in shell
+
+twmux launch -t %5 --exec -c "nvim /tmp/x"  # Command IS pane process; pane dies on exit
 """,
 )
 def launch(
@@ -393,24 +414,51 @@ def launch(
     vertical: Annotated[
         bool, typer.Option("-v", "--vertical", help="Split right instead of below")
     ] = False,
+    exec_mode: Annotated[
+        bool,
+        typer.Option(
+            "--exec",
+            help="Run command as pane's PID 1 (no shell wrap); pane dies when command exits",
+        ),
+    ] = False,
 ) -> None:
     """Create new pane by splitting target pane.
 
     Returns new pane ID for use in subsequent commands. Default split is
     horizontal (below); use -v for vertical (right).
 
+    With --exec, the command replaces the shell as the pane's root process.
+    The pane terminates automatically when the command exits — useful for
+    editors or TUIs combined with `twmux wait-pane`. Requires -c.
+
     JSON: {"ok": true, "pane_id": str}
-    Exit: Always 0.
+    Exit: Always 0 on success; 1 if --exec is used without -c.
     """
     from libtmux.constants import PaneDirection
+    from libtmux.exc import TmuxObjectDoesNotExist
+
+    if exec_mode and not command:
+        error_result("--exec requires -c/--command")
+        raise typer.Exit(1)
 
     pane = get_pane(target)
 
     direction = PaneDirection.Right if vertical else PaneDirection.Below
-    new_pane = pane.split(direction=direction)
-
-    if command:
-        new_pane.send_keys(command, enter=True)
+    if exec_mode:
+        try:
+            new_pane = pane.split(direction=direction, shell=command)
+        except TmuxObjectDoesNotExist:
+            # libtmux splits with -dP and parses the reply to learn the new pane id;
+            # if the command exits before that lookup resolves, the id is gone.
+            error_result(
+                "command exited before pane could be registered; "
+                "use a longer-running command or omit --exec"
+            )
+            raise typer.Exit(1)
+    else:
+        new_pane = pane.split(direction=direction)
+        if command:
+            new_pane.send_keys(command, enter=True)
 
     output_result({"pane_id": new_pane.pane_id})
 
@@ -441,16 +489,95 @@ def kill(
 
 
 @app.command(
+    name="wait-pane",
+    rich_help_panel="Pane Management",
+    epilog="""
+[bold]Examples[/bold]
+
+twmux wait-pane -t %5                      # Block forever until pane dies
+
+twmux wait-pane -t %5 --timeout 60         # Error after 60s if still alive
+
+twmux wait-pane -t %99999                  # Non-existent pane => gone immediately
+""",
+)
+def wait_pane(
+    target: Annotated[
+        str, typer.Option("-t", "--target", help="Pane to wait on", show_default=True)
+    ] = "",
+    timeout: Annotated[
+        float,
+        typer.Option(
+            "--timeout",
+            help="Max wait time in seconds (0 = forever)",
+            show_default=True,
+        ),
+    ] = 0.0,
+    interval: Annotated[
+        float,
+        typer.Option("--interval", help="Poll interval (seconds)", show_default=True),
+    ] = 0.2,
+) -> None:
+    """Block until pane no longer exists.
+
+    Polls the tmux server until the target pane is gone (e.g. its process
+    exited, or it was killed). Pairs with `launch --exec` to wait for an
+    editor or TUI launched in a split to close.
+
+    Idempotent: if the pane doesn't exist at call time, returns immediately.
+
+    JSON: {"ok": true, "gone": true, "elapsed": float}
+    Exit: 0 when pane is gone; 1 on timeout.
+    """
+    import time
+
+    from libtmux import Server
+    from libtmux.exc import LibTmuxException
+
+    if not target:
+        error_result("--target is required")
+        raise typer.Exit(1)
+
+    try:
+        server = Server(socket_name=socket_name)
+    except Exception as e:
+        error_result(f"Cannot connect to tmux server on socket '{socket_name}': {e}")
+        raise typer.Exit(1)
+
+    def pane_exists() -> bool:
+        try:
+            return any(p.pane_id == target for p in server.panes)
+        except LibTmuxException:
+            return False
+
+    start = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - start
+        if not pane_exists():
+            output_result({"gone": True, "elapsed": round(elapsed, 3)})
+            return
+        if timeout > 0 and elapsed >= timeout:
+            error_result(f"timeout after {round(elapsed, 3)}s (limit {timeout}s)")
+            raise typer.Exit(1)
+        time.sleep(interval)
+
+
+@app.command(
     name="move-pane",
     rich_help_panel="Pane Management",
     context_settings={"help_option_names": ["--help"]},
     epilog="""
 [bold]Examples[/bold]
-  twmux move-pane -t %5 debug           # New window in "debug"
-  twmux move-pane -t %5 debug:0         # Join window 0 in "debug"
-  twmux move-pane -t %5 debug:0 -b -h   # Join left of window 0, horizontal
-  twmux move-pane -t %5 debug:0 -h -l 30%  # Horizontal, 30% width
-  twmux move-pane -t %5 debug:0 -f -b   # Full-width, above target
+
+twmux move-pane -t %5 debug              # New window in "debug"
+
+twmux move-pane -t %5 debug:0            # Join window 0 in "debug"
+
+twmux move-pane -t %5 debug:0 -b -h      # Join left of window 0, horizontal
+
+twmux move-pane -t %5 debug:0 -h -l 30%  # Horizontal, 30% width
+
+twmux move-pane -t %5 debug:0 -f -b      # Full-width, above target
 """,
 )
 def move_pane(
@@ -637,9 +764,12 @@ def status(
     rich_help_panel="Session Management",
     epilog="""
 [bold]Examples[/bold]
-  twmux new myapp                    # Create session "myapp"
-  twmux new myapp -c "python3"       # Create and run command
-  twmux -L claude-isolated new test  # Use different socket
+
+twmux new myapp                    # Create session "myapp"
+
+twmux new myapp -c "python3"       # Create and run command
+
+twmux -L claude-isolated new test  # Use different socket
 """,
 )
 def new(
@@ -745,9 +875,11 @@ def kill_session_cmd(
     name="kill-server",
     rich_help_panel="Session Management",
     epilog="""
-[bold]Example[/bold]
-  twmux kill-server                    # Kill default claude server
-  twmux -L claude-isolated kill-server # Kill specific socket
+[bold]Examples[/bold]
+
+twmux kill-server                    # Kill default claude server
+
+twmux -L claude-isolated kill-server # Kill specific socket
 """,
 )
 def kill_server_cmd() -> None:
@@ -785,8 +917,10 @@ def kill_server_cmd() -> None:
     rich_help_panel="Session Management",
     epilog="""
 [bold]Examples[/bold]
-  twmux move-window -t build:0 debug       # Move window 0 of "build"
-  twmux move-window -t %5 debug            # Move window containing %5
+
+twmux move-window -t build:0 debug       # Move window 0 of "build"
+
+twmux move-window -t %5 debug            # Move window containing %5
 """,
 )
 def move_window(
