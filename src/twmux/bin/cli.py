@@ -402,6 +402,8 @@ twmux launch -t %5 -v                       # Split right (vertical)
 twmux launch -t %5 -c "python3"             # Split, run command in shell
 
 twmux launch -t %5 --exec -c "nvim /tmp/x"  # Command IS pane process; pane dies on exit
+
+twmux launch -t %5 --focus -c "python3"     # Split and move cursor to new pane
 """,
 )
 def launch(
@@ -421,6 +423,10 @@ def launch(
             help="Run command as pane's PID 1 (no shell wrap); pane dies when command exits",
         ),
     ] = False,
+    focus: Annotated[
+        bool,
+        typer.Option("--focus", help="Move cursor (active pane) to the new pane"),
+    ] = False,
 ) -> None:
     """Create new pane by splitting target pane.
 
@@ -431,11 +437,14 @@ def launch(
     The pane terminates automatically when the command exits — useful for
     editors or TUIs combined with `twmux wait-pane`. Requires -c.
 
-    JSON: {"ok": true, "pane_id": str}
+    With --focus, the new pane becomes the active pane (cursor moves into it).
+    Default is to leave focus on the original pane.
+
+    JSON: {"ok": true, "pane_id": str, "focused": bool, "focus_error"?: str}
     Exit: Always 0 on success; 1 if --exec is used without -c.
     """
     from libtmux.constants import PaneDirection
-    from libtmux.exc import TmuxObjectDoesNotExist
+    from libtmux.exc import LibTmuxException, TmuxObjectDoesNotExist
 
     if exec_mode and not command:
         error_result("--exec requires -c/--command")
@@ -460,7 +469,22 @@ def launch(
         if command:
             new_pane.send_keys(command, enter=True)
 
-    output_result({"pane_id": new_pane.pane_id})
+    focused = focus
+    focus_error: str | None = None
+    if focus:
+        try:
+            new_pane.select()
+        except (LibTmuxException, TmuxObjectDoesNotExist) as e:
+            # Degraded success: the pane exists, but focus didn't land
+            # (e.g. --exec command exited before select ran). Return the
+            # pane_id so callers can still clean up or retry.
+            focused = False
+            focus_error = str(e)
+
+    result: dict = {"pane_id": new_pane.pane_id, "focused": focused}
+    if focus_error is not None:
+        result["focus_error"] = focus_error
+    output_result(result)
 
 
 @app.command(
