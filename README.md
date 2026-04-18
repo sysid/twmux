@@ -138,7 +138,11 @@ twmux launch -t %5                           # Split below
 twmux launch -t %5 -v                        # Split right (vertical)
 twmux launch -t %5 -c "python3"              # Split; type command into shell
 twmux launch -t %5 --exec -c "nvim /tmp/x"   # Command IS pane process; pane dies on exit
+twmux launch -t %5 --focus -c "python3"      # Split and move cursor to new pane
 ```
+
+By default focus stays on the original pane (matches libtmux's detached split).
+Use `--focus` to make the new pane active immediately.
 
 With `--exec`, the command replaces the shell as the pane's PID 1. The pane
 terminates automatically when the command exits — pair with `wait-pane` to
@@ -405,6 +409,65 @@ The `wait-idle` command:
 2. Polls at configurable interval
 3. Returns when N consecutive hashes match
 4. Times out if content keeps changing
+
+## Python Library
+
+twmux's value-added primitives — race-safe send, marker-based execution, and
+idle detection — are importable directly from `twmux.lib.*`. Pair them with
+`libtmux` for pane/session management; there is no separate wrapper API to
+learn.
+
+```python
+import libtmux
+from twmux.lib.safe_input import send_safe, wait_for_idle
+from twmux.lib.execution import execute
+from twmux.lib.safety import validate_socket
+
+# Optional: enforce agent-socket policy (raises SocketValidationError)
+validate_socket("claude", force=False)
+
+server = libtmux.Server(socket_name="claude")
+pane = server.sessions[0].active_window.active_pane
+
+# Race-safe send: verifies pane content changed after Enter, retries on loss
+result = send_safe(pane, "make test", enter=True)
+assert result.success, f"lost Enter after {result.attempts} attempts"
+
+# Marker-based execute: captures output + real exit code
+res = execute(pane, "echo hello && false", timeout=10)
+print(res.output)      # "hello"
+print(res.exit_code)   # 1
+print(res.timed_out)   # False
+
+# Wait until the pane stops changing
+wait_result = wait_for_idle(pane, poll_interval=0.2, stable_count=3, timeout=30)
+```
+
+### Public surface
+
+| Module | Exports |
+|--------|---------|
+| `twmux.lib.safe_input` | `send_safe(pane, text, enter=True, enter_delay=0.05) -> SendResult`, `wait_for_idle(pane, poll_interval=0.2, stable_count=3, timeout=30.0) -> WaitResult` |
+| `twmux.lib.execution` | `execute(pane, cmd, timeout=30.0, poll_interval=0.2) -> ExecResult`, `ExecResult(output, exit_code, timed_out)` |
+| `twmux.lib.safety` | `validate_socket(socket_name, force)`, `is_agent_socket(socket_name)`, `enumerate_agent_sockets()`, `SocketValidationError` |
+
+### What about launch / kill / status / move-pane?
+
+These are thin wrappers over libtmux — call libtmux directly:
+
+```python
+# Instead of `twmux launch`:
+new_pane = pane.split(shell="python3")          # --exec equivalent
+new_pane = pane.split()                          # plain split
+new_pane.select()                                # --focus equivalent
+
+# Instead of `twmux kill`, `twmux status`:
+pane.kill()
+[p.pane_id for p in server.panes]
+```
+
+The CLI exists for the JSON envelope and agent-subprocess orchestration — if
+you're already in Python, libtmux is the API for those operations.
 
 ## Development
 

@@ -207,6 +207,99 @@ def test_escape_command(pane):
     assert data["escaped"] is True
 
 
+def test_launch_focus_selects_new_pane(session):
+    """--focus makes the new pane the active pane."""
+    socket_name = session.server.socket_name
+    old_pane = session.active_window.active_pane
+    old_pane_id = old_pane.pane_id
+
+    result = runner.invoke(
+        app,
+        ["-L", socket_name, "--force", "--json", "launch", "-t", old_pane_id, "--focus"],
+    )
+    data = assert_json_success(result)
+    assert data["focused"] is True
+    new_pane_id = data["pane_id"]
+
+    panes_by_id = {p.pane_id: p for p in session.active_window.panes}
+    assert panes_by_id[new_pane_id].pane_active == "1"
+    assert panes_by_id[old_pane_id].pane_active == "0"
+
+
+def test_launch_default_keeps_original_focus(session):
+    """Without --focus the original pane stays active."""
+    socket_name = session.server.socket_name
+    old_pane = session.active_window.active_pane
+    old_pane_id = old_pane.pane_id
+
+    result = runner.invoke(
+        app,
+        ["-L", socket_name, "--force", "--json", "launch", "-t", old_pane_id],
+    )
+    data = assert_json_success(result)
+    assert data["focused"] is False
+    new_pane_id = data["pane_id"]
+
+    panes_by_id = {p.pane_id: p for p in session.active_window.panes}
+    assert panes_by_id[old_pane_id].pane_active == "1"
+    assert panes_by_id[new_pane_id].pane_active == "0"
+
+
+def test_launch_focus_with_exec_selects_new_pane(session):
+    """--focus combined with --exec selects the new pane while the exec command runs."""
+    socket_name = session.server.socket_name
+    old_pane = session.active_window.active_pane
+    old_pane_id = old_pane.pane_id
+
+    result = runner.invoke(
+        app,
+        [
+            "-L",
+            socket_name,
+            "--force",
+            "--json",
+            "launch",
+            "-t",
+            old_pane_id,
+            "--exec",
+            "-c",
+            "sleep 5",
+            "--focus",
+        ],
+    )
+    data = assert_json_success(result)
+    assert data["focused"] is True
+    assert "focus_error" not in data
+    new_pane_id = data["pane_id"]
+
+    panes_by_id = {p.pane_id: p for p in session.active_window.panes}
+    assert panes_by_id[new_pane_id].pane_active == "1"
+    assert panes_by_id[old_pane_id].pane_active == "0"
+
+
+def test_launch_focus_failure_returns_degraded_success(session, monkeypatch):
+    """Focus failure is a degraded success: pane_id is returned, focused is False."""
+    from libtmux.exc import LibTmuxException
+    from libtmux.pane import Pane
+
+    def raise_select(self):
+        raise LibTmuxException("select-pane failed: no such pane")
+
+    monkeypatch.setattr(Pane, "select", raise_select)
+
+    socket_name = session.server.socket_name
+    old_pane_id = session.active_window.active_pane.pane_id
+
+    result = runner.invoke(
+        app,
+        ["-L", socket_name, "--force", "--json", "launch", "-t", old_pane_id, "--focus"],
+    )
+    data = assert_json_success(result)
+    assert data["focused"] is False
+    assert "pane_id" in data
+    assert "no such pane" in data["focus_error"]
+
+
 def test_launch_exec_pane_dies_on_command_exit(session):
     """With --exec, command is pane's PID 1, so pane dies when command exits."""
     socket_name = session.server.socket_name

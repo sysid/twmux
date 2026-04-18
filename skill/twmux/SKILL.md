@@ -25,7 +25,7 @@ Race-condition-safe tmux wrapper for coding agents. All commands return a consis
 | `exec` | Run shell command | `--timeout` |
 | `capture` | Get pane content | `-n lines` |
 | `wait-idle` | Wait for output stability | `--timeout`, `--interval` |
-| `launch` | Split pane | `-v` vertical, `-c command`, `--exec` (command IS pane PID 1) |
+| `launch` | Split pane | `-v` vertical, `-c command`, `--exec` (command IS pane PID 1), `--focus` (move cursor to new pane) |
 | `wait-pane` | Block until pane is gone | `--timeout`, `--interval` |
 | `interrupt` | Send Ctrl+C | |
 | `escape` | Send Escape key | |
@@ -180,6 +180,10 @@ twmux --json launch -t %5
 
 # Split vertically (new pane to the right)
 twmux --json launch -t %5 -v
+
+# Split and move cursor into the new pane (default leaves focus on original)
+twmux --json launch -t %5 --focus
+# {"ok": true, "pane_id": "%7", "focused": true}
 
 # Move a pane to another session
 twmux --json move-pane -t %6 other-session
