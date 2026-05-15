@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent that runs `twmux watch daemon` at login and keeps it alive.
+
+  Install:
+    1. Edit ProgramArguments[0] below — replace USERNAME with your $USER, or
+       run the sed in the README "macOS launchd" section, then:
+    2. cp examples/dev.sysid.twmux-watch.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/dev.sysid.twmux-watch.plist
+
+  Logs land in ~/.cache/twmux/watch.log and watch.err.
+
+  See README "Daemon lifecycle" for the trade-offs against tmux run-shell.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.sysid.twmux-watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/USERNAME/.local/bin/twmux</string>
+        <string>watch</string>
+        <string>daemon</string>
+        <string>--ensure-running</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- KeepAlive with SuccessfulExit=false: relaunch on crash, but not on
+         clean exit (e.g. when SIGTERM tells the daemon to stop). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Throttle restarts so a crash loop doesn't pin a CPU core. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- No StandardOutPath / StandardErrorPath: the daemon owns its own
+         logging via a Python RotatingFileHandler that caps total disk use
+         at ~4 MB (1 MB × 4 files). Letting launchd write to a raw file
+         here would defeat the rotation and grow unbounded on crash loops. -->
+
+    <!-- PATH must include the directory where `twmux` is installed.
+         Adjust if you use a non-default install location. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/USERNAME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,57 @@
+# twmux watch — agent classification config.
+#
+# Copy this file to ~/.config/twmux/agents.toml and tune the regexes to
+# match the TUIs of the agents you actually run.
+#
+# How it works:
+#   - cmd_match  : regex on the pane's current command (libtmux
+#                  pane_current_command). Useful for agents whose command
+#                  name is stable.
+#   - title_match: regex on the pane's title (libtmux pane_title). Useful
+#                  for agents like Claude Code whose command name is a
+#                  version string but whose title is set via OSC sequences.
+#                  An agent matches if EITHER cmd_match OR title_match hits.
+#   - re_wait    : pane is BLOCKING on user input (permission prompt).
+#                  Highest priority; rows in this state float to the top.
+#   - re_working : pane is actively processing.
+#   - re_idle    : pane is at its prompt with nothing to do.
+#
+# Precedence when multiple state regexes match: wait > working > idle.
+# Each state regex is applied with re.MULTILINE (anchors are per-line).
+
+poll_interval = 2.0   # seconds between polls
+
+[claude_code]
+# Claude Code's pane_current_command is its version (e.g. "2.1.139") — not
+# useful as a matcher. The title always starts with "✳ " (the spinner glyph).
+title_match = "^✳ "
+# Idle: CC's prompt is "❯" followed by a non-breaking space (\xc2\xa0), not
+# ASCII 0x20. Just anchor on the glyph at start-of-line — wait state is
+# checked first, so "❯ 1." numbered prompts classify as wait, not idle.
+re_idle     = "^❯"
+# Wait / working: tune by inspecting a live pane with `twmux capture -t <pane_id>`.
+# These are best-guess starters and will likely need adjustment per CC version.
+re_wait     = "Do you want to proceed|Do you trust|❯ 1\\."
+re_working  = "esc to interrupt"
+
+[aider]
+cmd_match  = "aider"
+re_wait    = "^\\? "
+re_idle    = "^> "
+
+# Add more agents here following the same pattern. Examples to extend:
+#
+# [codex_cli]
+# cmd_match  = "codex"
+# re_wait    = "..."
+# re_idle    = "..."
+#
+# [gemini_cli]
+# cmd_match  = "gemini"
+# re_wait    = "..."
+# re_idle    = "..."
+#
+# [opencode]
+# cmd_match  = "opencode"
+# re_wait    = "..."
+# re_idle    = "..."

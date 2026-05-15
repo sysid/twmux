@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Agent dashboard + switcher.
+#
+# Reads the TSV maintained by `twmux watch daemon` and presents it in fzf
+# inside a tmux popup. Each row is one agent pane; rows are pre-sorted by
+# urgency (longest-waiting first). Preview pane shows live `tmux capture-pane`
+# of the highlighted agent. Enter jumps to that pane.
+#
+# Usage:
+#   bind-key a display-popup -h 80% -w 90% -E "~/.config/tmux/tmux-agent-switcher"
+#
+# Requirements: fzf, twmux watch daemon running.
+
+set -Eeuo pipefail
+
+tsv="${XDG_CACHE_HOME:-$HOME/.cache}/twmux/agents.tsv"
+
+if [[ ! -s "$tsv" ]]; then
+  tmux display-message "no agents detected (is 'twmux watch daemon' running?)"
+  exit 0
+fi
+
+# TSV columns produced by the daemon (tab-separated):
+#   1: wait_human   2: state   3: agent   4: target   5: project   6: last_line
+# Field 4 is the tmux address; the preview and the jump action both need it.
+
+selected=$(
+  fzf --ansi \
+      --no-sort \
+      --reverse \
+      --height=100% \
+      --delimiter=$'\t' \
+      --with-nth=1,2,3,4,5,6 \
+      --header=$'wait\tstate\tagent\ttarget\tproject\tlast' \
+      --preview 'tmux capture-pane -p -t {4} 2>/dev/null | tail -40' \
+      --preview-window=down:55% \
+      < "$tsv"
+)
+
+[[ -z "$selected" ]] && exit 0
+
+# Field 4 is the target (session:window.pane)
+target=$(awk -F'\t' '{print $4}' <<<"$selected")
+window="${target%.*}"
+
+tmux switch-client -t "$window"
+tmux select-pane    -t "$target"

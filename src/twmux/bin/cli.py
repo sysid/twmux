@@ -979,5 +979,82 @@ def move_window(
     )
 
 
+# ============================================================================
+# `twmux watch` — multi-agent monitor (subcommand group)
+# ============================================================================
+
+watch_app = typer.Typer(
+    help="Monitor running coding agents across tmux sessions.",
+    no_args_is_help=True,
+)
+app.add_typer(
+    watch_app,
+    name="watch",
+    rich_help_panel="Info",
+)
+
+
+@watch_app.command("daemon")
+def watch_daemon(
+    ensure_running: Annotated[
+        bool,
+        typer.Option(
+            "--ensure-running",
+            help=(
+                "Exit silently if another daemon is already running "
+                "(idempotent for tmux run-shell)."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Run the agent-state polling daemon.
+
+    Polls every pane across all sockets at the interval configured in
+    ~/.config/twmux/agents.toml, classifies state per agent, and writes a
+    sorted TSV to ~/.cache/twmux/agents.tsv.
+    """
+    from twmux.lib.watch import load_config, run_daemon
+
+    cfg = load_config()
+    raise typer.Exit(run_daemon(cfg, ensure_running=ensure_running, log=True))
+
+
+@watch_app.command("stop")
+def watch_stop() -> None:
+    """Signal the running daemon to exit cleanly.
+
+    Reads the PID file, sends SIGTERM, polls until the process dies (or
+    times out at 5s). Useful before restarting after a config change or
+    after editing ~/.config/twmux/agents.toml — there's no hot reload.
+    """
+    from twmux.lib.watch import stop_daemon
+
+    result = stop_daemon()
+    if result.status == "not_running":
+        rprint("[dim]no daemon running[/dim]")
+    elif result.status == "stopped":
+        rprint(f"stopped pid={result.pid}")
+    else:
+        rprint(f"[yellow]timeout waiting for pid={result.pid} to exit[/yellow]")
+        raise typer.Exit(1)
+
+
+@watch_app.command("status")
+def watch_status() -> None:
+    """One-shot dump of the current agent state (no daemon, no file write).
+
+    Useful for debugging the regex configuration without opening the fzf
+    switcher.
+    """
+    from twmux.lib.watch import load_config, run_status_once
+
+    cfg = load_config()
+    output = run_status_once(cfg)
+    if not output:
+        rprint("[dim]No agents detected.[/dim]")
+        return
+    print(output, end="")
+
+
 if __name__ == "__main__":
     app()

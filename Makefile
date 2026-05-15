@@ -99,6 +99,73 @@ check-github-token:
 	@if [ -z "$$GITHUB_TOKEN" ]; then echo "GITHUB_TOKEN not set"; exit 1; fi
 
 ################################################################################
+# Daemon (twmux watch) \
+DAEMON: ## ############################################################
+
+# All watch-* targets work under both startup modes:
+#   * launchd  — when ~/Library/LaunchAgents/$(WATCH_LABEL).plist exists AND
+#                the service is currently registered. Native launchctl is used.
+#   * fallback — plain `twmux watch …` commands, suitable for tmux `run-shell`
+#                or ad-hoc foreground runs.
+# Detection happens inside each recipe so a user can install/remove the plist
+# without re-editing the Makefile.
+
+WATCH_LABEL  := dev.sysid.twmux-watch
+WATCH_DOMAIN := gui/$(shell id -u)
+WATCH_PLIST  := $(HOME)/Library/LaunchAgents/$(WATCH_LABEL).plist
+WATCH_LOG    := $(HOME)/.cache/twmux/watch.log
+WATCH_PID    := $(HOME)/.cache/twmux/watch.pid
+
+.PHONY: watch-start
+watch-start:  ## Start watch daemon (launchd if plist installed, else foreground)
+	@if [ -f $(WATCH_PLIST) ]; then \
+	    echo ">> launchctl bootstrap $(WATCH_DOMAIN) $(WATCH_PLIST)"; \
+	    launchctl bootstrap $(WATCH_DOMAIN) $(WATCH_PLIST) 2>&1 || \
+	      echo "  (already loaded — use 'make watch-restart' to pick up changes)"; \
+	  else \
+	    echo ">> twmux watch daemon --ensure-running &"; \
+	    twmux watch daemon --ensure-running >/dev/null 2>&1 & \
+	  fi
+
+.PHONY: watch-stop
+watch-stop:  ## Stop watch daemon (launchctl bootout under launchd, else SIGTERM)
+	@if [ -f $(WATCH_PLIST) ] && launchctl print $(WATCH_DOMAIN)/$(WATCH_LABEL) >/dev/null 2>&1; then \
+	    echo ">> launchctl bootout $(WATCH_DOMAIN)/$(WATCH_LABEL)"; \
+	    launchctl bootout $(WATCH_DOMAIN)/$(WATCH_LABEL); \
+	  else \
+	    echo ">> twmux watch stop"; \
+	    twmux watch stop; \
+	  fi
+
+.PHONY: watch-restart
+watch-restart:  ## Restart watch daemon (fast — picks up source edits)
+	@if [ -f $(WATCH_PLIST) ] && launchctl print $(WATCH_DOMAIN)/$(WATCH_LABEL) >/dev/null 2>&1; then \
+	    echo ">> launchctl kickstart -k $(WATCH_DOMAIN)/$(WATCH_LABEL)"; \
+	    launchctl kickstart -k $(WATCH_DOMAIN)/$(WATCH_LABEL); \
+	  else \
+	    echo ">> twmux watch stop && twmux watch daemon --ensure-running &"; \
+	    twmux watch stop >/dev/null 2>&1 || true; \
+	    twmux watch daemon --ensure-running >/dev/null 2>&1 & \
+	  fi
+
+.PHONY: watch-status
+watch-status:  ## Show whether the daemon is running (process, launchd, pid file)
+	@echo "[process]"
+	@pgrep -lf 'twmux watch daemon' | sed 's/^/  /' || echo "  no process"
+	@echo "[launchd]"
+	@launchctl list 2>/dev/null | grep $(WATCH_LABEL) | sed 's/^/  /' || echo "  not registered"
+	@echo "[pid file]"
+	@if [ -f $(WATCH_PID) ]; then echo "  $(WATCH_PID): $$(cat $(WATCH_PID))"; else echo "  none"; fi
+	@echo "[tsv]"
+	@if [ -f $(HOME)/.cache/twmux/agents.tsv ]; then \
+	    echo "  rows: $$(wc -l < $(HOME)/.cache/twmux/agents.tsv | tr -d ' ')"; \
+	  else echo "  none"; fi
+
+.PHONY: watch-logs
+watch-logs:  ## Tail the daemon log (Ctrl-C to exit)
+	@tail -F $(WATCH_LOG)
+
+################################################################################
 # Clean \
 CLEAN:  ## ############################################################
 
