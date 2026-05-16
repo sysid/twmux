@@ -81,14 +81,15 @@ def test_sort_wait_before_idle_before_working():
     assert [r.pane_id for r in out] == ["%3", "%2", "%1"]
 
 
-def test_sort_within_same_state_longer_wait_first():
-    """Among two waiting agents, longer-waiting one comes first."""
+def test_sort_within_same_state_shorter_wait_first():
+    """Within a state bucket, the more recently observed (shorter wait)
+    pane comes first — long-idle agents sink to the bottom."""
     rows = [
         make_row("wait", entered_at=200.0, pane_id="%1"),  # 200s waiting
         make_row("wait", entered_at=100.0, pane_id="%2"),  # 300s waiting
     ]
     out = sort_rows(rows, now=400.0)
-    assert [r.pane_id for r in out] == ["%2", "%1"]
+    assert [r.pane_id for r in out] == ["%1", "%2"]
 
 
 def test_sort_working_panes_dont_use_wait_time_for_secondary_sort():

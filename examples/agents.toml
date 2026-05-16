@@ -23,8 +23,10 @@ poll_interval = 2.0   # seconds between polls
 
 [claude_code]
 # Claude Code's pane_current_command is its version (e.g. "2.1.139") — not
-# useful as a matcher. The title always starts with "✳ " (the spinner glyph).
-title_match = "^✳ "
+# useful as a matcher. The title starts with "✳ " when idle, and with a
+# braille-block spinner glyph (U+2800–U+28FF, e.g. "⠐ ") while processing.
+# Match either so working panes show up in the popup, not just idle ones.
+title_match = "^[✳⠀-⣿] "
 # Idle: CC's prompt is "❯" followed by a non-breaking space (\xc2\xa0), not
 # ASCII 0x20. Just anchor on the glyph at start-of-line — wait state is
 # checked first, so "❯ 1." numbered prompts classify as wait, not idle.

@@ -610,8 +610,9 @@ poll_interval = 2.0   # seconds
 
 [claude_code]
 # CC's pane_current_command is its version string (e.g. "2.1.139") — use
-# the tmux pane title instead, which always starts with "✳ ".
-title_match = "^✳ "
+# the tmux pane title instead. It starts with "✳ " when idle, and with a
+# braille-block spinner glyph (U+2800–U+28FF, e.g. "⠐ ") while processing.
+title_match = "^[✳⠀-⣿] "
 # Idle: CC's prompt is "❯" followed by NBSP (\xc2\xa0), not ASCII space.
 re_idle     = "^❯"
 re_wait     = "Do you want to proceed|Do you trust|❯ 1\\."

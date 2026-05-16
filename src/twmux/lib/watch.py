@@ -79,11 +79,16 @@ def format_wait(secs: float) -> str:
 
 
 def sort_rows(rows: list[AgentRow], now: float) -> list[AgentRow]:
-    """Sort by state priority DESC, then by waiting time DESC."""
+    """Sort by state priority DESC, then by waiting time ASC.
+
+    State priority puts the most actionable bucket (wait) at the top. Within
+    each bucket, shorter wait_secs comes first so the most recently observed
+    panes are at the top of the popup — the long-idle tail sinks to the
+    bottom where it's easy to ignore.
+    """
     return sorted(
         rows,
-        key=lambda r: (state_priority(r.state), now - r.state_entered_at),
-        reverse=True,
+        key=lambda r: (-state_priority(r.state), now - r.state_entered_at),
     )
 
 
@@ -286,7 +291,13 @@ def _poll_once(
                     if cfg is None:
                         continue
 
-                    captured = pane.capture_pane(start=-50) or []
+                    # Visible area only (no scrollback). Pulling history with
+                    # start=-50 caused stale dialogs and stale "esc to
+                    # interrupt" strings from earlier in the session to
+                    # match re_wait / re_working — agents got mis-classified
+                    # as wait or working forever after one transient match.
+                    # Classification must reflect what's on screen NOW.
+                    captured = pane.capture_pane() or []
                     text = "\n".join(captured)
                     state = classify(text, cfg)
 

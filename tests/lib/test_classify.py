@@ -83,13 +83,19 @@ def test_match_agent_by_cmd_only():
 
 def test_match_agent_by_title_only():
     """Claude Code's command is a version string; the title is the reliable
-    signal. ✳ is the spinner character CC uses as a title prefix."""
-    cfg = AgentConfig(name="claude_code", title_match=r"^✳ ")
+    signal. ✳ is the title prefix CC uses when idle; while processing the
+    prefix cycles through braille spinner glyphs (U+2800–U+28FF). The
+    example config's regex covers both so working panes also match."""
+    cfg = AgentConfig(name="claude_code", title_match=r"^[✳⠀-⣿] ")
     assert _match_agent("2.1.139", "✳ Claude Code", [cfg]) is cfg
+    # Spinner-prefixed titles (working state) must also match, otherwise
+    # active sessions are invisible in the popup.
+    assert _match_agent("2.1.143", "⠐ Fix bug", [cfg]) is cfg
+    assert _match_agent("2.1.143", "⡀ Compiling", [cfg]) is cfg
 
 
 def test_match_agent_no_match_returns_none():
-    cfg = AgentConfig(name="claude_code", title_match=r"^✳ ")
+    cfg = AgentConfig(name="claude_code", title_match=r"^[✳⠀-⣿] ")
     assert _match_agent("bash", "regular terminal", [cfg]) is None
 
 
@@ -101,7 +107,7 @@ def test_match_agent_first_match_wins():
 
 def test_match_agent_either_signal_matches():
     """OR semantics — title hits even when cmd does not."""
-    cfg = AgentConfig(name="claude_code", cmd_match="claude", title_match=r"^✳ ")
+    cfg = AgentConfig(name="claude_code", cmd_match="claude", title_match=r"^[✳⠀-⣿] ")
     assert _match_agent("2.1.139", "✳ task", [cfg]) is cfg
     assert _match_agent("claude", "random", [cfg]) is cfg
 
