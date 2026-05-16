@@ -6,7 +6,16 @@ from twmux.lib.watch import _match_agent
 CLAUDE = AgentConfig(
     name="claude_code",
     cmd_match="claude",
-    re_working="esc to interrupt",
+    # Working: legacy "esc to interrupt" hint OR a spinner-anchored status
+    # line. The glyph anchor at line-start prevents false positives from
+    # plain text that happens to contain "… (5s)" (code comments, chat
+    # transcripts, doc snippets). The character class covers the Dingbats
+    # asterisk/sparkle/snowflake family (U+2726–U+274B = ✦…❋), since CC
+    # cycles through many glyphs (✱ ✲ ✳ ✶ ✸ ✺ ✻ ✼ ✽ ✪ ❋ …);
+    # narrower ranges keep getting bitten by an unlisted glyph. The range
+    # stops at U+274B so check marks / cross marks (U+274C onward) stay
+    # excluded.
+    re_working=r"esc to interrupt|^[✦-❋] .+… ?\(\d+[ms]",
     re_wait=r"do you want to proceed|Do you trust",
     re_idle=r"^│ > ",
 )
@@ -23,6 +32,50 @@ AIDER = AgentConfig(
 def test_claude_working_when_spinner_visible():
     pane = "Reading files...\n  ⏵ Compiling (esc to interrupt)\n"
     assert classify(pane, CLAUDE) == "working"
+
+
+def test_claude_working_via_elapsed_time_status():
+    """Newer auto/YOLO-mode CC drops "esc to interrupt" and prints only the
+    elapsed-time spinner line. The empty input prompt (`│ > `) is still
+    visible on screen — re_working must win over re_idle here, otherwise
+    actively running panes are mis-tagged idle."""
+    pane = (
+        "✽ Upgrading rstest… (2m 16s · ↓ 2.5k tokens · thought for 3s)\n"
+        "─────\n"
+        "│ > \n"
+    )
+    assert classify(pane, CLAUDE) == "working"
+
+
+def test_claude_working_matches_multiple_spinner_glyphs():
+    """CC cycles through many star/asterisk glyphs from the Dingbats block
+    on the body status line — observed in the wild: ✱ ✲ ✳ ✶ ✸ ✺ ✻ ✼ ✽
+    ✪. Notably ✳ is the same glyph CC uses as its idle title prefix, but
+    it can also appear in body spinner cycling. The regex must accept
+    any glyph in the Dingbats star/asterisk range, not just a hand-picked
+    subset — otherwise running panes whose spinner happens to land on an
+    unlisted glyph are mis-tagged idle."""
+    # ❋ (U+274B) is one CC actually uses — caught in the wild on
+    # `❋ Skedaddling… (50s · ↓ …)`. Earlier hand-picked subsets and
+    # narrower ranges (U+2726–U+2743) both missed it. The range now
+    # extends to U+274B so the full asterisk/sparkle/snowflake family
+    # is covered.
+    for glyph in ["✱", "✲", "✳", "✶", "✸", "✺", "✻", "✼", "✽", "✪", "❋"]:
+        pane = f"{glyph} Cultivating… (21s · thinking more with xhigh effort)\n│ > \n"
+        assert classify(pane, CLAUDE) == "working", f"failed for glyph {glyph!r}"
+
+
+def test_claude_idle_when_ellipsis_time_appears_without_spinner():
+    """Plain text containing '… (5s)' (e.g. a doc snippet, transcript, or
+    code comment quoted on screen) must NOT trigger working. The spinner
+    glyph anchor at line-start is what distinguishes a real CC status
+    line from incidental text that mentions an elapsed time."""
+    pane = (
+        "Some explanation about how the build took… (5s · really fast)\n"
+        "More text below.\n"
+        "│ > \n"
+    )
+    assert classify(pane, CLAUDE) == "idle"
 
 
 def test_claude_wait_on_permission_prompt():

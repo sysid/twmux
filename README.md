@@ -616,7 +616,12 @@ title_match = "^[✳⠀-⣿] "
 # Idle: CC's prompt is "❯" followed by NBSP (\xc2\xa0), not ASCII space.
 re_idle     = "^❯"
 re_wait     = "Do you want to proceed|Do you trust|❯ 1\\."
-re_working  = "esc to interrupt"
+# Match both the legacy "esc to interrupt" hint and CC's body status
+# line: any Dingbats star/sparkle/snowflake glyph (range U+2726–U+274B,
+# ✦…❋) at line-start, then "<verb>… (Ns". The glyph anchor avoids false
+# positives on plain text containing "… (5s)" (transcripts, doc
+# snippets quoted on screen).
+re_working  = "esc to interrupt|^[✦-❋] .+… ?\\(\\d+[ms]"
 
 [aider]
 cmd_match = "aider"

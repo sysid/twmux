@@ -34,7 +34,18 @@ re_idle     = "^❯"
 # Wait / working: tune by inspecting a live pane with `twmux capture -t <pane_id>`.
 # These are best-guess starters and will likely need adjustment per CC version.
 re_wait     = "Do you want to proceed|Do you trust|❯ 1\\."
-re_working  = "esc to interrupt"
+# Two working signals: the legacy "esc to interrupt" hint AND CC's body
+# status line — a line beginning with any Dingbats star/sparkle/snowflake
+# glyph, then a verb…, then "(<digits>s|<digits>m". The character class
+# spans U+2726–U+274B (= ✦…❋) — narrower ranges keep being bitten by
+# an unlisted glyph (e.g. ❋ at U+274B in `❋ Skedaddling…`, ✳ at U+2733
+# in `✳ Investigating skim…`). The range stops at U+274B so check marks /
+# cross marks (U+274C onward) stay excluded. Anchoring on the glyph at
+# line-start avoids false positives from plain text that happens to
+# contain "… (5s)" — code comments, chat transcripts, doc snippets
+# quoted on screen. Newer auto/YOLO mode drops "esc to interrupt"
+# entirely, so the spinner-anchored half is what actually fires today.
+re_working  = "esc to interrupt|^[✦-❋] .+… ?\\(\\d+[ms]"
 
 [aider]
 cmd_match  = "aider"
