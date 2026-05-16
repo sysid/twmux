@@ -8,7 +8,7 @@ from rich import print as rprint
 
 from twmux.lib.safety import DEFAULT_SOCKET, SocketValidationError, validate_socket
 
-__version__ = "0.7.2"
+__version__ = "0.7.3"
 
 app = typer.Typer(
     help="Race-condition-safe tmux wrapper for coding agents.",
