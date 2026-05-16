@@ -8,6 +8,7 @@ Split into two layers:
 
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import signal
@@ -348,19 +349,63 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+# Module-level fd that holds the singleton lock for the lifetime of the
+# daemon process. Kept open intentionally — flock is released when the FD
+# closes (normal exit, crash, SIGKILL), so the OS cleans up for us.
+_lock_fd: int | None = None
+
+
 def ensure_singleton() -> bool:
-    """Return True if we acquired the singleton lock, False if another daemon
-    is running. Writes our PID to PID_PATH on success."""
+    """Acquire an exclusive, non-blocking flock on PID_PATH.
+
+    Returns True if we acquired the lock, False if another daemon already
+    holds it. The previous implementation did a check-then-write on
+    PID_PATH; two daemons starting concurrently both saw "no live owner"
+    and both wrote their PID, racing forever on _atomic_write of the TSV.
+    flock is OS-enforced and race-free.
+
+    On success the file is truncated and our PID is written into it so
+    `twmux watch stop` and external observers know which process to
+    signal. The PID file is a courtesy; the singleton guarantee comes
+    from the kernel lock on _lock_fd, not from the file's content.
+    """
+    global _lock_fd
     PID_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if PID_PATH.exists():
-        try:
-            other = int(PID_PATH.read_text().strip())
-        except ValueError:
-            other = -1
-        if other > 0 and _pid_alive(other):
-            return False
-    PID_PATH.write_text(str(os.getpid()))
+    fd = os.open(PID_PATH, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return False
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    os.fsync(fd)
+    _lock_fd = fd
     return True
+
+
+def _release_singleton() -> None:
+    """Release the flock, close the lock FD, and remove the PID file.
+
+    Idempotent. Called from the daemon's `finally` block so that crashes
+    via SIGTERM/KeyboardInterrupt still clean up. SIGKILL skips this but
+    the kernel closes the FD anyway, releasing the flock.
+    """
+    global _lock_fd
+    if _lock_fd is not None:
+        try:
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(_lock_fd)
+        except OSError:
+            pass
+        _lock_fd = None
+    try:
+        PID_PATH.unlink()
+    except OSError:
+        pass
 
 
 # ----------------------------------------------------------------------------
@@ -409,11 +454,7 @@ def run_daemon(
         logger.info("daemon exiting")
         return 0
     finally:
-        try:
-            if PID_PATH.exists() and PID_PATH.read_text().strip() == str(os.getpid()):
-                PID_PATH.unlink()
-        except OSError:
-            pass
+        _release_singleton()
 
 
 @dataclass(frozen=True)

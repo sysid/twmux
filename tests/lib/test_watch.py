@@ -160,6 +160,41 @@ def test_stop_daemon_kills_and_waits(tmp_path, monkeypatch):
     assert killed == [(12345, signal_mod.SIGTERM)]
 
 
+def test_ensure_singleton_blocks_concurrent_second_acquire(tmp_path, monkeypatch):
+    """Race-resistance: when two daemons start at nearly the same time, only
+    one may hold the singleton. The previous check-then-write implementation
+    had a TOCTOU window and allowed multiple daemons to coexist, racing on
+    _atomic_write of the TSV. A kernel-level flock closes that window.
+
+    Verified in-process by simulating two independent acquisitions against
+    the same lock file: the first succeeds, a second from a different FD
+    must fail, and once the first releases, acquisition becomes possible
+    again.
+    """
+    import os
+
+    from twmux.lib import watch
+
+    monkeypatch.setattr(watch, "PID_PATH", tmp_path / "watch.pid")
+    monkeypatch.setattr(watch, "_lock_fd", None)
+
+    assert watch.ensure_singleton() is True
+    first_fd = watch._lock_fd
+    assert first_fd is not None
+
+    # Simulate a second daemon process invoking ensure_singleton — fresh
+    # FD opened inside the call, but the kernel-held lock on first_fd
+    # must block acquisition.
+    monkeypatch.setattr(watch, "_lock_fd", None)
+    assert watch.ensure_singleton() is False
+
+    # After releasing the first holder, acquisition is possible again.
+    os.close(first_fd)
+    monkeypatch.setattr(watch, "_lock_fd", None)
+    assert watch.ensure_singleton() is True
+    watch._release_singleton()
+
+
 def test_setup_logging_uses_rotating_file_handler(tmp_path):
     """Daemon logs must be size-bounded to avoid filling the disk on a
     crash loop. RotatingFileHandler caps each file and keeps N backups."""
