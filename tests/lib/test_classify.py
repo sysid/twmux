@@ -165,9 +165,78 @@ def test_match_agent_either_signal_matches():
     assert _match_agent("claude", "random", [cfg]) is cfg
 
 
+def test_match_agent_content_match_gates_cmd():
+    """content_match adds an AND gate — cmd_match hits but content must also match."""
+    cfg = AgentConfig(name="copilot_cli", cmd_match="^node$", content_match=r"/ commands · \? help")
+    # node + copilot footer → match
+    assert _match_agent("node", "Fix bug", [cfg], content="stuff\n/ commands · ? help\n") is cfg
+    # node but no footer → no match
+    assert _match_agent("node", "Fix bug", [cfg], content="Express listening on :3000\n") is None
+    # non-node → no match even with footer
+    assert _match_agent("python", "x", [cfg], content="/ commands · ? help\n") is None
+
+
+def test_match_agent_content_match_skips_to_next_candidate():
+    """When content_match fails, try the next agent in the list."""
+    copilot = AgentConfig(name="copilot_cli", cmd_match="^node$", content_match=r"/ commands · \? help")
+    generic_node = AgentConfig(name="generic_node", cmd_match="node")
+    # No footer → copilot skipped, generic_node matches
+    assert _match_agent("node", "", [copilot, generic_node], content="server ready") is generic_node
+
+
 def test_idle_matches_prompt_line_anywhere_in_capture():
     """Idle pattern is line-anchored (MULTILINE ^). The prompt line can
     appear anywhere in the capture; if working/wait don't match more
     strongly, the pane is considered idle."""
     pane = "│ > \nsome later output\n"
     assert classify(pane, CLAUDE) == "idle"
+
+
+# -- Copilot CLI classification ------------------------------------------------
+
+COPILOT = AgentConfig(
+    name="copilot_cli",
+    cmd_match="^node$",
+    content_match=r"/ commands · \? help",
+    re_idle=r"^❯\s*$",
+    re_working=r"Esc to cancel",
+    re_wait=None,
+)
+
+
+def test_copilot_idle_at_prompt():
+    pane = (
+        " ~/dev/project [⎇ main]\n"
+        "────────────────────────────────\n"
+        "❯\n"
+        "────────────────────────────────\n"
+        " / commands · ? help                 Claude Opus 4.6\n"
+    )
+    assert classify(pane, COPILOT) == "idle"
+
+
+def test_copilot_working_during_tool_execution():
+    pane = (
+        "● Running tests (Esc to cancel · 2.1 KiB)\n"
+        " ~/dev/project [⎇ main]\n"
+        "────────────────────────────────\n"
+        "❯\n"
+        "────────────────────────────────\n"
+        " / commands · ? help                 Claude Opus 4.6\n"
+    )
+    assert classify(pane, COPILOT) == "working"
+
+
+def test_copilot_wait_on_numbered_choices():
+    """Without re_wait, copilot at prompt classifies as idle even when
+    ask_user choices are visible — idle already means 'needs attention'."""
+    pane = (
+        "? What database should I use?\n"
+        "1. PostgreSQL (Recommended)\n"
+        "2. MySQL\n"
+        "────────────────────────────────\n"
+        "❯\n"
+        "────────────────────────────────\n"
+        " / commands · ? help                 Claude Opus 4.6\n"
+    )
+    assert classify(pane, COPILOT) == "idle"

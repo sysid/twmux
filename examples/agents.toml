@@ -4,17 +4,21 @@
 # match the TUIs of the agents you actually run.
 #
 # How it works:
-#   - cmd_match  : regex on the pane's current command (libtmux
-#                  pane_current_command). Useful for agents whose command
-#                  name is stable.
-#   - title_match: regex on the pane's title (libtmux pane_title). Useful
-#                  for agents like Claude Code whose command name is a
-#                  version string but whose title is set via OSC sequences.
-#                  An agent matches if EITHER cmd_match OR title_match hits.
-#   - re_wait    : pane is BLOCKING on user input (permission prompt).
-#                  Highest priority; rows in this state float to the top.
-#   - re_working : pane is actively processing.
-#   - re_idle    : pane is at its prompt with nothing to do.
+#   - cmd_match    : regex on the pane's current command (libtmux
+#                    pane_current_command). Useful for agents whose command
+#                    name is stable.
+#   - title_match  : regex on the pane's title (libtmux pane_title). Useful
+#                    for agents like Claude Code whose command name is a
+#                    version string but whose title is set via OSC sequences.
+#                    An agent matches if EITHER cmd_match OR title_match hits.
+#   - content_match: regex on the captured pane text. When set, the pane must
+#                    ALSO match this pattern (AND logic with cmd/title). Use
+#                    when cmd_match is too broad (e.g. "node" catches any
+#                    node process, but only Copilot has its distinctive footer).
+#   - re_wait      : pane is BLOCKING on user input (permission prompt).
+#                    Highest priority; rows in this state float to the top.
+#   - re_working   : pane is actively processing.
+#   - re_idle      : pane is at its prompt with nothing to do.
 #
 # Precedence when multiple state regexes match: wait > working > idle.
 # Each state regex is applied with re.MULTILINE (anchors are per-line).
@@ -68,3 +72,17 @@ re_idle    = "^> "
 # cmd_match  = "opencode"
 # re_wait    = "..."
 # re_idle    = "..."
+
+[copilot_cli]
+# GitHub Copilot CLI runs as a node script (pane_current_command = "node").
+# content_match gates on the distinctive footer only Copilot renders,
+# preventing false positives from dev servers or other node processes.
+cmd_match     = "^node$"
+content_match = "/ commands · \\? help"
+# Idle: the ❯ prompt on its own line (between ─── separator bars).
+re_idle       = "^❯\\s*$"
+# Working: the "Esc to cancel" hint shown during tool execution.
+re_working    = "Esc to cancel"
+# No re_wait: copilot's ask_user choices (numbered lines) are hard to
+# distinguish from numbered lists in normal agent output. "idle" already
+# signals "needs user attention" which is close enough.

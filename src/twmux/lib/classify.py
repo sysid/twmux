@@ -24,11 +24,17 @@ class AgentConfig:
 
     A pane matches this agent if EITHER cmd_match hits the pane's current
     command OR title_match hits the pane's title. At least one must be set.
+
+    If content_match is set, the pane content (captured text) must ALSO match
+    this regex — this prevents false positives when cmd_match is broad
+    (e.g. "node" matches any node process, but only Copilot has the
+    distinctive footer).
     """
 
     name: str
     cmd_match: str | None = None
     title_match: str | None = None
+    content_match: str | None = None
     re_working: str | None = None
     re_wait: str | None = None
     re_idle: str | None = None

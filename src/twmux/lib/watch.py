@@ -135,6 +135,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
                 name=name,
                 cmd_match=section.get("cmd_match"),
                 title_match=section.get("title_match"),
+                content_match=section.get("content_match"),
                 re_working=section.get("re_working"),
                 re_wait=section.get("re_wait"),
                 re_idle=section.get("re_idle"),
@@ -224,19 +225,27 @@ def _pane_title(pane) -> str:
     return ""
 
 
-def _match_agent(cmd: str, title: str, agents: list[AgentConfig]) -> AgentConfig | None:
+def _match_agent(
+    cmd: str, title: str, agents: list[AgentConfig], content: str = ""
+) -> AgentConfig | None:
     """Find first agent config that matches this pane.
 
     An agent matches if either its cmd_match regex hits the pane's current
-    command OR its title_match regex hits the pane title. Missing patterns
-    are skipped.
+    command OR its title_match regex hits the pane title. If the matching
+    config also has content_match, the pane's captured text must satisfy
+    that regex too — otherwise we skip to the next candidate.
     """
     import re
 
     for cfg in agents:
+        hit = False
         if cfg.cmd_match and re.search(cfg.cmd_match, cmd):
-            return cfg
-        if cfg.title_match and re.search(cfg.title_match, title):
+            hit = True
+        elif cfg.title_match and re.search(cfg.title_match, title):
+            hit = True
+        if hit:
+            if cfg.content_match and not re.search(cfg.content_match, content, re.MULTILINE):
+                continue
             return cfg
     return None
 
@@ -257,7 +266,7 @@ def _last_nonblank_line(captured: list[str]) -> str:
 
 def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(content)
     tmp.replace(path)
 
@@ -288,18 +297,16 @@ def _poll_once(
                 for pane in window.panes:
                     cmd = pane.pane_current_command or ""
                     title = _pane_title(pane)
-                    cfg = _match_agent(cmd, title, config.agents)
+
+                    # Capture visible area before matching so content_match
+                    # can gate agent identification (e.g. "node" + footer).
+                    captured = pane.capture_pane() or []
+                    text = "\n".join(captured)
+
+                    cfg = _match_agent(cmd, title, config.agents, content=text)
                     if cfg is None:
                         continue
 
-                    # Visible area only (no scrollback). Pulling history with
-                    # start=-50 caused stale dialogs and stale "esc to
-                    # interrupt" strings from earlier in the session to
-                    # match re_wait / re_working — agents got mis-classified
-                    # as wait or working forever after one transient match.
-                    # Classification must reflect what's on screen NOW.
-                    captured = pane.capture_pane() or []
-                    text = "\n".join(captured)
                     state = classify(text, cfg)
 
                     # libtmux types pane_id as Optional[str] because it's
@@ -368,6 +375,10 @@ def ensure_singleton() -> bool:
     `twmux watch stop` and external observers know which process to
     signal. The PID file is a courtesy; the singleton guarantee comes
     from the kernel lock on _lock_fd, not from the file's content.
+
+    After acquiring the lock, if the PID file contained a still-alive PID
+    (from an old daemon that predates the flock mechanism), SIGTERM it so
+    we don't coexist with a legacy daemon that never held the lock.
     """
     global _lock_fd
     PID_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -377,7 +388,25 @@ def ensure_singleton() -> bool:
     except OSError:
         os.close(fd)
         return False
+
+    # We hold the lock. Check if there's a stale daemon (pre-flock era)
+    # that is alive but doesn't hold the lock.
+    try:
+        existing = os.pread(fd, 32, 0).decode().strip()
+        if existing:
+            old_pid = int(existing)
+            if old_pid != os.getpid() and _pid_alive(old_pid):
+                os.kill(old_pid, signal.SIGTERM)
+                # Brief wait for clean exit
+                for _ in range(20):
+                    time.sleep(0.1)
+                    if not _pid_alive(old_pid):
+                        break
+    except (ValueError, OSError):
+        pass
+
     os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
     os.write(fd, str(os.getpid()).encode())
     os.fsync(fd)
     _lock_fd = fd
@@ -421,12 +450,14 @@ def run_daemon(
     """Polling loop. Returns 0 on graceful exit, 1 if singleton failed."""
     logger = setup_logging()
 
-    if ensure_running and not ensure_singleton():
+    if not ensure_singleton():
         msg = "another daemon is already running"
         logger.info(msg)
         if log:
             print(f"twmux watch: {msg}", file=sys.stderr)
-        return 0  # not an error — caller asked us to be idempotent
+        # --ensure-running means "be idempotent" (exit 0); without it,
+        # failing to acquire singleton is an error (exit 1).
+        return 0 if ensure_running else 1
 
     # Translate SIGTERM into KeyboardInterrupt so the `finally` block runs.
     # Without this, `tmux kill-server` (sends SIGTERM) leaves a stale PID file.
