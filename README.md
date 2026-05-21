@@ -234,6 +234,28 @@ twmux status --all          # Show all agent sockets (claude*)
 twmux --force status --all  # Show all sockets including user's
 ```
 
+### reattach - Restore TMUX env in a scrubbed shell
+
+After `exec env -i ... bash --login` inside a tmux pane, `TMUX` and `TMUX_PANE`
+are gone — but the shell is still attached to the same pane's tty. `reattach`
+finds that pane on the given socket (by matching its tty) and prints the
+`export` lines needed to rebuild the env.
+
+```bash
+# Typical recovery: human shell on the default socket
+eval "$(twmux -L default --force reattach)"
+
+# JSON envelope (e.g. for an agent)
+twmux -L default --force reattach --json
+
+# --tty is normally unneeded (defaults to /dev/tty). Use $(tty) if you must:
+twmux -L default --force reattach --tty "$(tty)"
+```
+
+Socket selection uses the global `-L`/`--socket` flag like every other
+command. The default socket is `claude`; targeting `default` (or any
+non-`claude*` socket) requires `--force`, same as elsewhere.
+
 ## Target Addressing
 
 The `-t` option accepts tmux target syntax to identify panes.

@@ -1494,3 +1494,62 @@ class TestJsonEnvelope:
         assert "send" in command_names
         assert "status" in command_names
         assert "exec" in command_names
+
+
+# --- reattach subcommand ---
+
+
+class TestReattach:
+    def test_default_output_is_eval_able_exports(self, pane):
+        """Default output: two `export` lines safe to eval."""
+        result = runner.invoke(
+            app,
+            ["-L", pane.server.socket_name, "--force", "reattach", "--tty", pane.pane_tty],
+        )
+        assert result.exit_code == 0, f"Failed: {result.output}"
+        lines = [ln for ln in result.output.splitlines() if ln.strip()]
+        assert len(lines) == 2
+        assert lines[0].startswith("export TMUX='")
+        assert lines[0].endswith("';")
+        assert lines[1] == f"export TMUX_PANE='{pane.pane_id}';"
+
+    def test_json_envelope_has_all_fields(self, pane):
+        result = runner.invoke(
+            app,
+            [
+                "-L",
+                pane.server.socket_name,
+                "--force",
+                "--json",
+                "reattach",
+                "--tty",
+                pane.pane_tty,
+            ],
+        )
+        data = assert_json_success(result)
+        for key in (
+            "socket",
+            "socket_path",
+            "server_pid",
+            "session_id",
+            "pane_id",
+            "tty",
+            "tmux",
+            "tmux_pane",
+        ):
+            assert key in data, f"missing key {key} in {data}"
+        assert data["pane_id"] == pane.pane_id
+        assert data["tty"] == pane.pane_tty
+        assert data["tmux_pane"] == pane.pane_id
+
+    def test_no_match_returns_error_envelope(self):
+        """A tty that exists on no pane → ok=False, exit 1.
+
+        Targets the default agent socket (`claude`), so no --force needed. If
+        no claude server is running, recover_tmux_env still returns None
+        gracefully and the error envelope is emitted either way.
+        """
+        result = runner.invoke(
+            app, ["--json", "reattach", "--tty", "/dev/no-such-tty-xyz"]
+        )
+        assert_json_error(result, expected_msg="no tmux pane found")

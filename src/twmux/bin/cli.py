@@ -785,6 +785,71 @@ def status(
 
 
 @app.command(
+    rich_help_panel="Info",
+    epilog="""
+[bold]Use[/bold]
+
+eval "$(twmux -L default --force reattach)"   # restore TMUX/TMUX_PANE in scrubbed shell
+
+[bold]Why[/bold]
+
+After `env -i bash --login` inside tmux, TMUX/TMUX_PANE are gone but the shell
+is still attached to its pane's tty. `reattach` finds that pane on the given
+socket and prints the exports needed to rebuild the env.
+
+The socket is selected via the global -L/--socket flag (default: claude). A
+human shell normally lives on the `default` socket, which requires --force
+because it is not an agent socket.
+
+[bold]About --tty[/bold]
+
+You normally don't need it. The default reads /dev/tty, the controlling
+terminal — a kernel attribute of the process that survives `env -i`. The flag
+exists for tests and scripted contexts that have no controlling terminal. If
+you do want to pass it explicitly, the unix `tty` command prints the right
+value:
+
+    twmux -L default --force reattach --tty "$(tty)"
+""",
+)
+def reattach(
+    tty: Annotated[
+        str | None,
+        typer.Option(
+            "--tty",
+            help="Override tty (default: /dev/tty). Normally unneeded; use `$(tty)` if you must.",
+        ),
+    ] = None,
+) -> None:
+    """Print shell exports to restore TMUX / TMUX_PANE in a scrubbed environment.
+
+    Default output is eval-able shell (two `export` statements). Use --json for
+    a structured envelope. Operates on the socket selected by the global
+    -L/--socket flag (with --force for non-agent sockets like `default`).
+
+    JSON: {"ok": true, "socket": str, "socket_path": str, "server_pid": int,
+           "session_id": str, "pane_id": str, "tty": str, "tmux": str,
+           "tmux_pane": str}
+    Exit: 0 on success, 1 if no matching pane found.
+    """
+    from twmux.lib.safety import recover_tmux_env
+
+    result = recover_tmux_env(tty=tty, socket_name=socket_name)
+    if result is None:
+        tty_label = tty or "/dev/tty"
+        error_result(f"no tmux pane found for tty {tty_label}")
+        raise typer.Exit(1)
+
+    if json_output:
+        output_result(result)
+    else:
+        # Eval-able shell exports. Single-quoting is safe: socket paths and
+        # pane IDs (%N) never contain single quotes.
+        print(f"export TMUX='{result['tmux']}';")
+        print(f"export TMUX_PANE='{result['tmux_pane']}';")
+
+
+@app.command(
     rich_help_panel="Session Management",
     epilog="""
 [bold]Examples[/bold]
