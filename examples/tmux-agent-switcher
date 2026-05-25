@@ -21,26 +21,40 @@ if [[ ! -s "$tsv" ]]; then
 fi
 
 # TSV columns produced by the daemon (tab-separated):
-#   1: wait_human   2: state   3: agent   4: target   5: project   6: last_line
+#   1: wait_human  2: state  3: agent  4: target  5: project  6: title  7: last_line
 # Field 4 is the tmux address; the preview and the jump action both need it.
+# Field 6 (title) is the running program's pane_title — for Claude Code it's a
+# short description of the current task, set automatically via OSC escapes.
 
+# fzf renders raw tabs at fixed 8-col tab stops, leaving the columns ragged.
+# Pre-align into fixed-width columns with awk (width per column computed from
+# the data), prepend a header row, and freeze it with --header-lines=1. Empty
+# title/last cells render as "-" so columns never shift. `column -t` is avoided
+# on purpose: BSD column collapses empty fields, which would misalign exactly
+# those rows. The aligned line is space-separated; target stays whitespace
+# field 4 because wait/state/agent never contain spaces.
 selected=$(
-  fzf --ansi \
-      --no-sort \
-      --reverse \
-      --height=100% \
-      --delimiter=$'\t' \
-      --with-nth=1,2,3,4,5,6 \
-      --header=$'wait\tstate\tagent\ttarget\tproject\tlast' \
-      --preview 'tmux capture-pane -p -t {4} 2>/dev/null | tail -40' \
-      --preview-window=down:55% \
-      < "$tsv"
+  { printf 'wait\tstate\tagent\ttarget\tproject\ttitle\tlast\n'; cat "$tsv"; } \
+    | awk -F'\t' '
+        { for (i = 1; i <= NF; i++) { cell[NR, i] = $i; if (length($i) > w[i]) w[i] = length($i) }
+          if (NF > nf) nf = NF; n = NR }
+        END { for (r = 1; r <= n; r++) { line = ""
+                for (i = 1; i <= nf; i++) { v = (cell[r, i] == "") ? "-" : cell[r, i]
+                  line = (i < nf) ? line sprintf("%-*s  ", w[i], v) : line v }
+                print line } }' \
+    | fzf --ansi \
+        --no-sort \
+        --reverse \
+        --height=100% \
+        --header-lines=1 \
+        --preview 'tmux capture-pane -p -t {4} 2>/dev/null | tail -40' \
+        --preview-window=down:55%
 )
 
 [[ -z "$selected" ]] && exit 0
 
-# Field 4 is the target (session:window.pane)
-target=$(awk -F'\t' '{print $4}' <<<"$selected")
+# Columns are space-padded now; target is whitespace field 4 (see note above).
+target=$(awk '{print $4}' <<<"$selected")
 window="${target%.*}"
 
 tmux switch-client -t "$window"

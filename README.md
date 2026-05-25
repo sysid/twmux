@@ -508,11 +508,41 @@ tmux switcher.
    - **wait** — agent is blocked on user input
    - **working** — agent is actively processing
    - **idle** — agent is at its prompt, nothing happening
-3. State and waiting-time are written, sorted, to
-   `~/.cache/twmux/agents.tsv`.
-4. An fzf-based tmux switcher (see below) reads the TSV — its list is the
-   dashboard, its preview pane shows the live agent output, and Enter jumps
-   you to the corresponding pane.
+3. State, waiting-time, and per-pane metadata are written — sorted by
+   urgency — to `~/.cache/twmux/agents.tsv` (format below).
+4. An fzf-based tmux switcher (see "Setup") reads that TSV — the list is the
+   dashboard, the preview pane shows live agent output, and Enter jumps you to
+   the corresponding pane.
+
+### The `agents.tsv` file
+
+The daemon's only output is a single file, atomically rewritten every
+`poll_interval` seconds:
+
+```
+~/.cache/twmux/agents.tsv
+```
+
+It is the contract between the daemon (producer) and the switcher (consumer) —
+anything that can read a TSV can build its own dashboard on top of it. One
+tab-separated row per matched agent pane, **no header line** (the switcher
+supplies the column names itself):
+
+| # | Column | Meaning |
+| --- | --- | --- |
+| 1 | `wait` | Human-readable time in the current state (`12s`, `5m04s`, `1h2m`); `-` while `working` |
+| 2 | `state` | `wait` \| `working` \| `idle` \| `unknown` |
+| 3 | `agent` | Name of the `agents.toml` section that matched this pane |
+| 4 | `target` | `session:window.pane` address — the switcher's preview and jump both key off this |
+| 5 | `project` | Basename of the pane's working directory |
+| 6 | `title` | The pane's `pane_title`. For Claude Code this is its current task, set automatically via OSC escapes; set your own on any pane with `tmux select-pane -T "label"` |
+| 7 | `last_line` | Last non-blank line of the captured pane content |
+
+Rows are **sorted by urgency**: first by state (`wait` → `idle` → `working` →
+`unknown`), then within each bucket the shortest time-in-state first — so panes
+that just changed sit at the top and the long-idle tail sinks to the bottom.
+Inspect it any time with `cat ~/.cache/twmux/agents.tsv`. An empty or absent
+file means no panes matched (or the daemon isn't running).
 
 ### Setup
 

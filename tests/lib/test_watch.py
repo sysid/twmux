@@ -4,12 +4,19 @@ from twmux.lib.watch import (
     AgentRow,
     format_wait,
     merge_state,
+    render_tsv,
     sort_rows,
     state_priority,
 )
 
 
-def make_row(state: str, entered_at: float, pane_id: str = "%1") -> AgentRow:
+def make_row(
+    state: str,
+    entered_at: float,
+    pane_id: str = "%1",
+    title: str = "",
+    last_line: str = "",
+) -> AgentRow:
     return AgentRow(
         pane_id=pane_id,
         target=f"sess:1.{pane_id.lstrip('%')}",
@@ -17,7 +24,8 @@ def make_row(state: str, entered_at: float, pane_id: str = "%1") -> AgentRow:
         agent="claude_code",
         state=state,
         state_entered_at=entered_at,
-        last_line="",
+        title=title,
+        last_line=last_line,
     )
 
 
@@ -108,6 +116,33 @@ def test_sort_working_panes_dont_use_wait_time_for_secondary_sort():
 
 def test_sort_empty_list_returns_empty():
     assert sort_rows([], now=0.0) == []
+
+
+# -- render_tsv ----------------------------------------------------------------
+
+
+def test_render_tsv_includes_title_column_between_project_and_last_line():
+    """The pane title is surfaced as its own column so the switcher can show
+    what each agent is working on. Column order must stay
+    wait, state, agent, target, project, title, last_line — the switcher and
+    its preview/jump logic index columns positionally (target is field 4)."""
+    row = make_row(
+        "wait",
+        entered_at=100.0,
+        title="Add titles to switcher",
+        last_line="some output",
+    )
+    line = render_tsv([row], now=160.0).rstrip("\n")
+    fields = line.split("\t")
+    assert fields == [
+        "1m00s",  # wait
+        "wait",  # state
+        "claude_code",  # agent
+        "sess:1.1",  # target
+        "proj",  # project
+        "Add titles to switcher",  # title
+        "some output",  # last_line
+    ]
 
 
 # -- logging setup -------------------------------------------------------------

@@ -39,6 +39,7 @@ class AgentRow:
     agent: str  # agent config name (e.g. "claude_code")
     state: State
     state_entered_at: float
+    title: str  # pane_title set by the running program (display only)
     last_line: str
 
 
@@ -99,7 +100,9 @@ def render_tsv(rows: list[AgentRow], now: float) -> str:
     lines = []
     for r in rows:
         wait = format_wait(now - r.state_entered_at) if r.state != "working" else "-"
-        lines.append("\t".join([wait, r.state, r.agent, r.target, r.project, r.last_line]))
+        lines.append(
+            "\t".join([wait, r.state, r.agent, r.target, r.project, r.title, r.last_line])
+        )
     return "\n".join(lines) + ("\n" if lines else "")
 
 
@@ -330,6 +333,7 @@ def _poll_once(
                             agent=cfg.name,
                             state=new_state,
                             state_entered_at=entered,
+                            title=title,
                             last_line=_last_nonblank_line(captured),
                         )
                     )
