@@ -1,7 +1,9 @@
 """Tests for classify module: per-agent pane state classification."""
 
+from pathlib import Path
+
 from twmux.lib.classify import AgentConfig, classify
-from twmux.lib.watch import _match_agent
+from twmux.lib.watch import _match_agent, load_config
 
 CLAUDE = AgentConfig(
     name="claude_code",
@@ -39,11 +41,7 @@ def test_claude_working_via_elapsed_time_status():
     elapsed-time spinner line. The empty input prompt (`│ > `) is still
     visible on screen — re_working must win over re_idle here, otherwise
     actively running panes are mis-tagged idle."""
-    pane = (
-        "✽ Upgrading rstest… (2m 16s · ↓ 2.5k tokens · thought for 3s)\n"
-        "─────\n"
-        "│ > \n"
-    )
+    pane = "✽ Upgrading rstest… (2m 16s · ↓ 2.5k tokens · thought for 3s)\n─────\n│ > \n"
     assert classify(pane, CLAUDE) == "working"
 
 
@@ -70,11 +68,7 @@ def test_claude_idle_when_ellipsis_time_appears_without_spinner():
     code comment quoted on screen) must NOT trigger working. The spinner
     glyph anchor at line-start is what distinguishes a real CC status
     line from incidental text that mentions an elapsed time."""
-    pane = (
-        "Some explanation about how the build took… (5s · really fast)\n"
-        "More text below.\n"
-        "│ > \n"
-    )
+    pane = "Some explanation about how the build took… (5s · really fast)\nMore text below.\n│ > \n"
     assert classify(pane, CLAUDE) == "idle"
 
 
@@ -178,7 +172,9 @@ def test_match_agent_content_match_gates_cmd():
 
 def test_match_agent_content_match_skips_to_next_candidate():
     """When content_match fails, try the next agent in the list."""
-    copilot = AgentConfig(name="copilot_cli", cmd_match="^node$", content_match=r"/ commands · \? help")
+    copilot = AgentConfig(
+        name="copilot_cli", cmd_match="^node$", content_match=r"/ commands · \? help"
+    )
     generic_node = AgentConfig(name="generic_node", cmd_match="node")
     # No footer → copilot skipped, generic_node matches
     assert _match_agent("node", "", [copilot, generic_node], content="server ready") is generic_node
@@ -192,51 +188,113 @@ def test_idle_matches_prompt_line_anywhere_in_capture():
     assert classify(pane, CLAUDE) == "idle"
 
 
+# -- Codex CLI classification --------------------------------------------------
+
+EXAMPLE_AGENTS_CONFIG = Path(__file__).parents[2] / "examples" / "agents.toml"
+
+
+def _shipped_codex_config() -> tuple[AgentConfig, list[AgentConfig]]:
+    agents = load_config(EXAMPLE_AGENTS_CONFIG).agents
+    codex = next((agent for agent in agents if agent.name == "codex_cli"), None)
+    assert codex is not None, "examples/agents.toml must ship a codex_cli block"
+    return codex, agents
+
+
+def test_codex_idle_pane_is_identified_and_classified():
+    codex, agents = _shipped_codex_config()
+    pane = "All work complete.\n\n› Improve documentation in @filename\n"
+
+    assert _match_agent("node", "codex | twmux", agents, content=pane) is codex
+    assert classify(pane, codex) == "idle"
+
+
+def test_codex_working_pane_wins_over_claude_spinner_title():
+    codex, agents = _shipped_codex_config()
+    pane = "• Working (45s • esc to interrupt)\n\n› Improve documentation in @filename\n"
+
+    assert _match_agent("node", "⠸ codex | twmux", agents, content=pane) is codex
+    assert classify(pane, codex) == "working"
+
+
+def test_codex_waits_on_numbered_choice():
+    codex, agents = _shipped_codex_config()
+    pane = "Do you trust the contents of this directory?\n\n› 1. Yes, continue\n  2. No, quit\n"
+
+    assert _match_agent("node", "codex | twmux", agents, content=pane) is codex
+    assert classify(pane, codex) == "wait"
+
+
+def test_codex_does_not_claim_unrelated_node_process():
+    codex, agents = _shipped_codex_config()
+
+    assert (
+        _match_agent("node", "development server", agents, content="Listening on :3000\n") is None
+    )
+    assert codex.cmd_match is None
+
+
 # -- Copilot CLI classification ------------------------------------------------
 
+# Mirrors the shipped examples/agents.toml copilot_cli block. Identity
+# (content_match) is the UNION of the per-state footers — the idle help line,
+# the working status line, and the question confirm hint — so a pane is
+# recognised whatever state Copilot is in. Earlier this gated only on the idle
+# footer, which made working/question panes vanish from the switcher.
 COPILOT = AgentConfig(
     name="copilot_cli",
     cmd_match="^node$",
-    content_match=r"/ commands · \? help",
-    re_idle=r"^❯\s*$",
-    re_working=r"Esc to cancel",
-    re_wait=None,
+    content_match=r"/ commands · \? help|Working · .* esc cancel|enter to confirm · esc to cancel",
+    re_idle=r"/ commands · \? help",
+    re_working=r"Working · .* esc cancel",
+    re_wait=r"enter to confirm · esc to cancel",
 )
 
 
 def test_copilot_idle_at_prompt():
     pane = (
-        " ~/dev/project [⎇ main]\n"
-        "────────────────────────────────\n"
+        " ~/dev/project [⎇ main]                              Session: 12 AIC used\n"
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
         "❯\n"
-        "────────────────────────────────\n"
-        " / commands · ? help                 Claude Opus 4.6\n"
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        " / commands · ? help · tab next tab                 Claude Opus 4.8\n"
     )
     assert classify(pane, COPILOT) == "idle"
 
 
-def test_copilot_working_during_tool_execution():
+def test_copilot_idle_with_update_banner_has_no_prompt_glyph():
+    """Regression: when the 'update available' banner replaces the footer the
+    ❯ prompt glyph is suppressed. Idle is keyed on the help footer (still
+    present in the banner), not the glyph, so this must classify idle — the old
+    ^❯ rule classified it 'unknown'."""
     pane = (
-        "● Running tests (Esc to cancel · 2.1 KiB)\n"
-        " ~/dev/project [⎇ main]\n"
-        "────────────────────────────────\n"
-        "❯\n"
-        "────────────────────────────────\n"
-        " / commands · ? help                 Claude Opus 4.6\n"
+        " ~/dev/project [⎇ main]                              Session: 185 AIC used\n"
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        " v1.0.67 available · run /update · / commands · ? help · tab next tab"
+        "       Claude Opus 4.8\n"
     )
+    assert classify(pane, COPILOT) == "idle"
+
+
+def test_copilot_working_pane_is_identified_and_classified():
+    """The core fix: a real working pane shows only the 'Working · … esc
+    cancel' footer — NOT the idle help footer. It must still be identified as
+    Copilot (content_match) AND classified working. The old idle-only
+    content_match dropped it, so re_working was dead code."""
+    pane = "◉ Working · 3.7 KiB esc cancel                       Claude Opus 4.8\n"
+    assert _match_agent("node", "Fix bug", [COPILOT], content=pane) is COPILOT
     assert classify(pane, COPILOT) == "working"
 
 
-def test_copilot_wait_on_numbered_choices():
-    """Without re_wait, copilot at prompt classifies as idle even when
-    ask_user choices are visible — idle already means 'needs attention'."""
+def test_copilot_wait_on_ask_user_choice_box():
+    """An ask_user choice box replaces the footer with a confirm/cancel hint
+    and no idle help footer. re_wait fires (checked before working), and the
+    'esc to cancel' hint must not be misread as the working 'esc cancel'."""
     pane = (
-        "? What database should I use?\n"
-        "1. PostgreSQL (Recommended)\n"
-        "2. MySQL\n"
-        "────────────────────────────────\n"
-        "❯\n"
-        "────────────────────────────────\n"
-        " / commands · ? help                 Claude Opus 4.6\n"
+        "│ How do you want me to proceed?                              │\n"
+        "│ ❯ 1. Option one                                             │\n"
+        "│   2. Option two                                             │\n"
+        "│ ↑/↓ to select · enter to confirm · esc to cancel            │\n"
     )
-    assert classify(pane, COPILOT) == "idle"
+    assert _match_agent("node", "Fix bug", [COPILOT], content=pane) is COPILOT
+    assert classify(pane, COPILOT) == "wait"

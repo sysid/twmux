@@ -1,9 +1,10 @@
 """twmux CLI entry point."""
 
 import json as json_lib
-from typing import Annotated
+from typing import Annotated, TypedDict
 
 import typer
+from click import Group
 from rich import print as rprint
 
 from twmux.lib.safety import DEFAULT_SOCKET, SocketValidationError, validate_socket
@@ -35,6 +36,29 @@ Use --json for programmatic output (all commands).
 json_output: bool = False
 socket_name: str = DEFAULT_SOCKET
 force_socket: bool = False
+
+
+class PaneStatus(TypedDict):
+    pane_id: str | None
+    pane_index: str | None
+
+
+class WindowStatus(TypedDict):
+    window_id: str | None
+    window_index: str | None
+    window_name: str | None
+    panes: list[PaneStatus]
+
+
+class SessionStatus(TypedDict):
+    session_id: str | None
+    session_name: str | None
+    windows: list[WindowStatus]
+
+
+class SocketStatus(TypedDict):
+    socket: str
+    sessions: list[SessionStatus]
 
 
 def print_version() -> None:
@@ -70,9 +94,13 @@ def main(
             raise typer.Exit(0)
         if json_output:
             # Machine-discoverable command listing for agents
+            if not isinstance(ctx.command, Group):
+                raise RuntimeError("twmux root command must be a Click group")
             commands = []
             for name in sorted(ctx.command.list_commands(ctx)):
                 cmd = ctx.command.get_command(ctx, name)
+                if cmd is None:
+                    raise RuntimeError(f"listed command could not be resolved: {name}")
                 commands.append({"name": name, "description": (cmd.help or "").split("\n")[0]})
             output_result({"commands": commands})
             raise typer.Exit(0)
@@ -725,7 +753,7 @@ def status(
     else:
         sockets_to_show = [socket_name]
 
-    all_data = []
+    all_data: list[SocketStatus] = []
 
     for sock in sockets_to_show:
         try:
@@ -735,11 +763,11 @@ def status(
         except Exception:
             continue
 
-        sessions_data = []
+        sessions_data: list[SessionStatus] = []
         for session in server.sessions:
-            windows_data = []
+            windows_data: list[WindowStatus] = []
             for window in session.windows:
-                panes_data = [
+                panes_data: list[PaneStatus] = [
                     {"pane_id": p.pane_id, "pane_index": p.pane_index} for p in window.panes
                 ]
                 windows_data.append(
@@ -894,6 +922,7 @@ def new(
         raise typer.Exit(1)
 
     pane = session.active_window.active_pane
+    assert pane is not None, "new tmux session must have an active pane"
 
     # Run command if specified
     if command:

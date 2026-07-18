@@ -80,9 +80,7 @@ def _current_tty() -> str | None:
         os.close(fd)
 
 
-def recover_tmux_env(
-    tty: str | None = None, socket_name: str | None = None
-) -> dict | None:
+def recover_tmux_env(tty: str | None = None, socket_name: str | None = None) -> dict | None:
     """Find the tmux pane attached to `tty` and return data to rebuild TMUX env.
 
     Use case: a shell scrubbed by `env -i` has lost `TMUX` / `TMUX_PANE`, but is
@@ -141,22 +139,27 @@ def recover_tmux_env(
             continue
 
         try:
-            pid_result = server.cmd("display-message", "-pF", "#{pid}")
+            pid_result = server.cmd("display-message", "-pF#{pid}")
             server_pid = int(pid_result.stdout[0])
         except Exception:
             continue
 
-        session_id_num = matched_session.session_id.lstrip("$")
+        session_id = matched_session.session_id
+        pane_id = matched_pane.pane_id
+        if session_id is None or pane_id is None:
+            continue
+
+        session_id_num = session_id.lstrip("$")
         socket_path = str(socket_dir / sock)
         return {
             "socket": sock,
             "socket_path": socket_path,
             "server_pid": server_pid,
             "session_id": session_id_num,
-            "pane_id": matched_pane.pane_id,
+            "pane_id": pane_id,
             "tty": tty,
             "tmux": f"{socket_path},{server_pid},{session_id_num}",
-            "tmux_pane": matched_pane.pane_id,
+            "tmux_pane": pane_id,
         }
 
     return None

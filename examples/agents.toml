@@ -25,6 +25,22 @@
 
 poll_interval = 2.0   # seconds between polls
 
+[codex_cli]
+# Codex's npm launcher reports pane_current_command = "node", so give Codex a
+# stable app-name in its terminal title instead of matching every node process:
+#   [tui]
+#   terminal_title = ["spinner", "app-name", "project"]
+# Keep Codex before Claude: both use a braille working spinner, and matching is
+# first-wins. The app-name suffix keeps the Codex title collision-free.
+title_match = "^(?:[⠀-⣿] )?codex [|] "
+# Numbered choices replace the normal prompt when Codex needs user input.
+# Wait is checked before idle, so "› 1." cannot be misclassified as idle.
+re_wait     = "^› [1-9]\\."
+# Active status lines end with an interrupt hint inside parentheses. Anchoring
+# the whole line avoids matching the same words in normal conversation text.
+re_working  = "^• .+\\(.*esc to interrupt\\)$"
+re_idle     = "^› "
+
 [claude_code]
 # Claude Code's pane_current_command is its version (e.g. "2.1.139") — not
 # useful as a matcher. The title starts with "✳ " when idle, and with a
@@ -58,11 +74,6 @@ re_idle    = "^> "
 
 # Add more agents here following the same pattern. Examples to extend:
 #
-# [codex_cli]
-# cmd_match  = "codex"
-# re_wait    = "..."
-# re_idle    = "..."
-#
 # [gemini_cli]
 # cmd_match  = "gemini"
 # re_wait    = "..."
@@ -75,14 +86,23 @@ re_idle    = "^> "
 
 [copilot_cli]
 # GitHub Copilot CLI runs as a node script (pane_current_command = "node").
-# content_match gates on the distinctive footer only Copilot renders,
-# preventing false positives from dev servers or other node processes.
+# Copilot's footer chrome differs per state, so identity is gated on the
+# UNION of the per-state footers — NOT just the idle one. Gating on only the
+# idle footer made working/question panes lose their footer, fail
+# identification, and vanish from the switcher. cmd_match already narrows to
+# node processes; among those these footer strings are Copilot-specific.
+# ponytail: brittle to Copilot UI-string changes — upgrade path is a stable
+# identity marker (title/OSC app-id) if the footers drift again.
 cmd_match     = "^node$"
-content_match = "/ commands · \\? help"
-# Idle: the ❯ prompt on its own line (between ─── separator bars).
-re_idle       = "^❯\\s*$"
-# Working: the "Esc to cancel" hint shown during tool execution.
-re_working    = "Esc to cancel"
-# No re_wait: copilot's ask_user choices (numbered lines) are hard to
-# distinguish from numbered lists in normal agent output. "idle" already
-# signals "needs user attention" which is close enough.
+content_match = "/ commands · \\? help|Working · .* esc cancel|enter to confirm · esc to cancel"
+# Idle: the help footer, shown whenever Copilot sits at its prompt (with or
+# without an "update available" banner). More reliable than the ❯ glyph,
+# which the update banner suppresses.
+re_idle       = "/ commands · \\? help"
+# Working: current footer is "◉ Working · <size> esc cancel" (spinner glyph
+# varies, so anchor on the stable tail).
+re_working    = "Working · .* esc cancel"
+# Wait: an ask_user choice box shows this confirm/cancel hint. Checked before
+# working, so a question never misreads as working — note the "to": the
+# working footer says "esc cancel", the question says "esc to cancel".
+re_wait       = "enter to confirm · esc to cancel"

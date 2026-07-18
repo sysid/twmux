@@ -657,8 +657,25 @@ Notes:
 
 ### `agents.toml`
 
+Codex is launched through `node`, so command matching cannot distinguish it
+from other Node applications. Add Codex's stable app name to its terminal title
+in `~/.codex/config.toml`; newly started Codex sessions then identify themselves
+without relying on brittle footer text:
+
+```toml
+[tui]
+terminal_title = ["spinner", "app-name", "project"]
+```
+
 ```toml
 poll_interval = 2.0   # seconds
+
+[codex_cli]
+# Keep this before Claude: both use a braille spinner while working.
+title_match = "^(?:[⠀-⣿] )?codex [|] "
+re_wait     = "^› [1-9]\\."
+re_working  = "^• .+\\(.*esc to interrupt\\)$"
+re_idle     = "^› "
 
 [claude_code]
 # CC's pane_current_command is its version string (e.g. "2.1.139") — use

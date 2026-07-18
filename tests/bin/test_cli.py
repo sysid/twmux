@@ -61,8 +61,13 @@ def test_send_command(pane):
     )
     assert result.exit_code == 0, f"Failed: {result.output}"
 
-    time.sleep(0.3)
-    content = pane.capture_pane()
+    deadline = time.monotonic() + 3.0
+    content = []
+    while time.monotonic() < deadline:
+        content = pane.capture_pane()
+        if any("cli_test" in line for line in content):
+            break
+        time.sleep(0.05)
     assert any("cli_test" in line for line in content)
 
 
@@ -1549,7 +1554,5 @@ class TestReattach:
         no claude server is running, recover_tmux_env still returns None
         gracefully and the error envelope is emitted either way.
         """
-        result = runner.invoke(
-            app, ["--json", "reattach", "--tty", "/dev/no-such-tty-xyz"]
-        )
+        result = runner.invoke(app, ["--json", "reattach", "--tty", "/dev/no-such-tty-xyz"])
         assert_json_error(result, expected_msg="no tmux pane found")

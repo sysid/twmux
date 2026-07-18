@@ -163,6 +163,7 @@ class TestRecoverTmuxEnvMocked:
             server_pid=4242,
         )
         import libtmux
+
         monkeypatch.setattr(libtmux, "Server", lambda **kw: fake)
 
         result = recover_tmux_env(tty="/dev/ttys001")
@@ -182,6 +183,7 @@ class TestRecoverTmuxEnvMocked:
 
         fake = self._fake_server(panes_by_session=[("$0", [("%1", "/dev/ttys000")])])
         import libtmux
+
         monkeypatch.setattr(libtmux, "Server", lambda **kw: fake)
 
         assert recover_tmux_env(tty="/dev/ttys999") is None
@@ -202,6 +204,7 @@ class TestRecoverTmuxEnvMocked:
             return fake_live
 
         import libtmux
+
         monkeypatch.setattr(libtmux, "Server", server_factory)
 
         result = recover_tmux_env(tty="/dev/ttys042")

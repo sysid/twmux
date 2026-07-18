@@ -100,9 +100,7 @@ def render_tsv(rows: list[AgentRow], now: float) -> str:
     lines = []
     for r in rows:
         wait = format_wait(now - r.state_entered_at) if r.state != "working" else "-"
-        lines.append(
-            "\t".join([wait, r.state, r.agent, r.target, r.project, r.title, r.last_line])
-        )
+        lines.append("\t".join([wait, r.state, r.agent, r.target, r.project, r.title, r.last_line]))
     return "\n".join(lines) + ("\n" if lines else "")
 
 
