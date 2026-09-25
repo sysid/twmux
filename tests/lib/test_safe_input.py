@@ -27,9 +27,6 @@ def test_wait_for_idle_already_idle(pane):
     """Pane with no activity should return idle immediately."""
     from twmux.lib.safe_input import wait_for_idle
 
-    # Give shell time to settle
-    time.sleep(0.3)
-
     result = wait_for_idle(pane, poll_interval=0.1, stable_count=2, timeout=5.0)
     assert result.idle is True
     assert result.elapsed < 2.0
@@ -62,9 +59,6 @@ def test_send_safe_success(pane):
     """Text should be sent and Enter verified."""
     from twmux.lib.safe_input import send_safe
 
-    # Give shell time to settle
-    time.sleep(0.3)
-
     result = send_safe(pane, "echo hello", enter_delay=0.1)
     assert result.success is True
     assert result.attempts >= 1
@@ -78,8 +72,6 @@ def test_send_safe_success(pane):
 def test_send_safe_no_enter(pane):
     """Should send text without Enter when enter=False."""
     from twmux.lib.safe_input import send_safe
-
-    time.sleep(0.3)
 
     # Clear and send text without enter
     pane.send_keys("C-c", enter=False)

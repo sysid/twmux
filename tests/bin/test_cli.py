@@ -91,7 +91,6 @@ def test_exec_command(pane):
     """Execute command via CLI."""
     pane_id = pane.pane_id
     socket_name = pane.server.socket_name
-    time.sleep(0.3)
 
     result = runner.invoke(
         app, ["-L", socket_name, "--force", "--json", "exec", "-t", pane_id, "echo exec_test"]
@@ -107,7 +106,6 @@ def test_exec_command_failure(pane):
     """Execute failing command via CLI."""
     pane_id = pane.pane_id
     socket_name = pane.server.socket_name
-    time.sleep(0.3)
 
     result = runner.invoke(
         app, ["-L", socket_name, "--force", "--json", "exec", "-t", pane_id, "ls /nonexistent_xyz"]
@@ -137,7 +135,6 @@ def test_wait_idle_command(pane):
     """Wait for idle via CLI."""
     pane_id = pane.pane_id
     socket_name = pane.server.socket_name
-    time.sleep(0.3)
 
     result = runner.invoke(
         app, ["-L", socket_name, "--force", "--json", "wait-idle", "-t", pane_id, "--timeout", "2"]
@@ -1354,7 +1351,6 @@ class TestJsonEnvelope:
 
     def test_send_success_has_ok(self, pane):
         """send success response includes ok: true."""
-        time.sleep(0.3)
         result = runner.invoke(
             app,
             [
@@ -1446,7 +1442,6 @@ class TestJsonEnvelope:
 
     def test_wait_idle_success_has_ok(self, pane):
         """wait-idle success response includes ok: true."""
-        time.sleep(0.3)
         result = runner.invoke(
             app,
             [
@@ -1557,6 +1552,7 @@ class TestReattach:
         """
         result = runner.invoke(app, ["--json", "reattach", "--tty", "/dev/no-such-tty-xyz"])
         assert_json_error(result, expected_msg="no tmux pane found")
+
 
 # --- config subcommand ---
 

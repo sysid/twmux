@@ -107,8 +107,6 @@ def test_execute_simple_command(pane):
     """Execute simple command and capture exit code."""
     from twmux.lib.execution import execute
 
-    time.sleep(0.3)  # Let shell settle
-
     result = execute(pane, "echo hello", timeout=5.0)
     assert result.exit_code == 0
     assert "hello" in result.output
@@ -119,8 +117,6 @@ def test_execute_failing_command(pane):
     """Command with non-zero exit code."""
     from twmux.lib.execution import execute
 
-    time.sleep(0.3)
-
     result = execute(pane, "ls /nonexistent_path_12345", timeout=5.0)
     assert result.exit_code != 0
     assert result.timed_out is False
@@ -129,8 +125,6 @@ def test_execute_failing_command(pane):
 def test_execute_timeout(pane):
     """Long-running command should timeout."""
     from twmux.lib.execution import execute
-
-    time.sleep(0.3)
 
     result = execute(pane, "sleep 10", timeout=0.5)
     assert result.timed_out is True
