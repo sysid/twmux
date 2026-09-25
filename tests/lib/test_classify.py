@@ -235,19 +235,43 @@ def test_codex_does_not_claim_unrelated_node_process():
 
 # -- Copilot CLI classification ------------------------------------------------
 
-# Mirrors the shipped examples/agents.toml copilot_cli block. Identity
-# (content_match) is the UNION of the per-state footers — the idle help line,
-# the working status line, and the question confirm hint — so a pane is
-# recognised whatever state Copilot is in. Earlier this gated only on the idle
-# footer, which made working/question panes vanish from the switcher.
-COPILOT = AgentConfig(
-    name="copilot_cli",
-    cmd_match="^node$",
-    content_match=r"/ commands · \? help|Working · .* esc cancel|enter to confirm · esc to cancel",
-    re_idle=r"/ commands · \? help",
-    re_working=r"Working · .* esc cancel",
-    re_wait=r"enter to confirm · esc to cancel",
-)
+
+def _shipped_copilot_config() -> tuple[AgentConfig, list[AgentConfig]]:
+    agents = load_config(EXAMPLE_AGENTS_CONFIG).agents
+    copilot = next((agent for agent in agents if agent.name == "copilot_cli"), None)
+    assert copilot is not None, "examples/agents.toml must ship a copilot_cli block"
+    return copilot, agents
+
+
+# Identity is the pane title ("<task> - GitHub Copilot") AND content_match —
+# the UNION of the per-state footers (idle help line, working status line,
+# question confirm hint) — so a pane is recognised whatever state Copilot is
+# in. Earlier content_match gated only on the idle footer, which made
+# working/question panes vanish from the switcher.
+COPILOT, _ = _shipped_copilot_config()
+
+
+def test_copilot_is_identified_by_title_when_launched_through_a_wrapper():
+    """Regression: launched via a sandbox wrapper (`uv run srti-wrap -c
+    copilot`), tmux reports pane_current_command = "uv", not "node". The old
+    cmd_match="^node$" dropped every wrapped Copilot pane from the switcher;
+    the title Copilot sets is independent of how it was launched."""
+    copilot, agents = _shipped_copilot_config()
+    pane = " / commands · ? help · tab next tab                 Claude Opus 5\n"
+
+    assert (
+        _match_agent("uv", "Conduct Twitter Review - GitHub Copilot", agents, content=pane)
+        is copilot
+    )
+    assert _match_agent("node", "GitHub Copilot", agents, content=pane) is copilot
+
+
+def test_copilot_does_not_claim_unrelated_node_process():
+    copilot, agents = _shipped_copilot_config()
+    pane = " / commands · ? help · tab next tab\n"
+
+    assert _match_agent("node", "development server", agents, content=pane) is None
+    assert copilot.cmd_match is None
 
 
 def test_copilot_idle_at_prompt():
@@ -282,7 +306,7 @@ def test_copilot_working_pane_is_identified_and_classified():
     Copilot (content_match) AND classified working. The old idle-only
     content_match dropped it, so re_working was dead code."""
     pane = "◉ Working · 3.7 KiB esc cancel                       Claude Opus 4.8\n"
-    assert _match_agent("node", "Fix bug", [COPILOT], content=pane) is COPILOT
+    assert _match_agent("node", "Fix bug - GitHub Copilot", [COPILOT], content=pane) is COPILOT
     assert classify(pane, COPILOT) == "working"
 
 
@@ -296,5 +320,5 @@ def test_copilot_wait_on_ask_user_choice_box():
         "│   2. Option two                                             │\n"
         "│ ↑/↓ to select · enter to confirm · esc to cancel            │\n"
     )
-    assert _match_agent("node", "Fix bug", [COPILOT], content=pane) is COPILOT
+    assert _match_agent("node", "Fix bug - GitHub Copilot", [COPILOT], content=pane) is COPILOT
     assert classify(pane, COPILOT) == "wait"

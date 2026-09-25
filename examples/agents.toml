@@ -85,15 +85,18 @@ re_idle    = "^> "
 # re_idle    = "..."
 
 [copilot_cli]
-# GitHub Copilot CLI runs as a node script (pane_current_command = "node").
-# Copilot's footer chrome differs per state, so identity is gated on the
-# UNION of the per-state footers — NOT just the idle one. Gating on only the
-# idle footer made working/question panes lose their footer, fail
-# identification, and vanish from the switcher. cmd_match already narrows to
-# node processes; among those these footer strings are Copilot-specific.
-# ponytail: brittle to Copilot UI-string changes — upgrade path is a stable
-# identity marker (title/OSC app-id) if the footers drift again.
-cmd_match     = "^node$"
+# Match on the title Copilot sets ("<task> - GitHub Copilot"), not on
+# pane_current_command: tmux reports the foreground process-group leader, which
+# is "node" only when Copilot is launched directly. Behind a wrapper (e.g.
+# `uv run srti-wrap -c copilot`) it is "uv", and cmd_match = "^node$" silently
+# dropped every wrapped Copilot pane from the switcher.
+title_match   = "GitHub Copilot$"
+# Copilot's footer chrome differs per state, so content_match is the UNION of
+# the per-state footers — NOT just the idle one. Gating on only the idle
+# footer made working/question panes lose their footer, fail identification,
+# and vanish from the switcher.
+# ponytail: brittle to Copilot UI-string changes — the title alone is the
+# fallback identity if the footers drift again.
 content_match = "/ commands · \\? help|Working · .* esc cancel|enter to confirm · esc to cancel"
 # Idle: the help footer, shown whenever Copilot sits at its prompt (with or
 # without an "update available" banner). More reliable than the ❯ glyph,
