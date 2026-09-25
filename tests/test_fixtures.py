@@ -30,3 +30,17 @@ def test_kill_server_removes_its_socket_file(server):
     kill_server(server)
 
     assert not socket_file.exists()
+
+
+def test_tmux_server_factory_never_touches_the_real_agent_socket(tmux_server):
+    """Tests that need extra named sockets must get isolated, PID-scoped ones.
+    Tests used to create and kill the real `claude` socket — the default agent
+    socket — killing any agents running there during `make test`."""
+    agent = tmux_server("claude-test")
+    non_agent = tmux_server("test-non-agent")
+
+    assert agent.socket_name.startswith("claude-test-")
+    assert agent.socket_name != "claude"
+    assert non_agent.socket_name.startswith("test-non-agent-")
+    assert agent.has_session("placeholder")
+    assert agent.cmd("show-options", "-g", "prefix").stdout == ["prefix C-b"]

@@ -508,8 +508,12 @@ class TestSocketSafety:
     """Test socket safety enforcement."""
 
     def test_non_agent_socket_requires_force(self):
-        """Non-claude sockets require --force."""
-        result = runner.invoke(app, ["-L", "default", "status"])
+        """Non-claude sockets require --force.
+
+        The check is by name, so no server is needed — and the user's real
+        `default` socket is never touched should the check regress.
+        """
+        result = runner.invoke(app, ["-L", "test-non-agent-unused", "status"])
         assert result.exit_code != 0
         assert "not an agent socket" in result.output
 
@@ -658,11 +662,19 @@ class TestKillServerCommand:
         server = Server(socket_name="claude-test-killsrv")
         assert len(server.sessions) == 0
 
-    def test_kill_server_refuses_non_agent_socket(self):
-        """kill-server refuses to kill non-agent sockets."""
-        result = runner.invoke(app, ["-L", "default", "kill-server"])
+    def test_kill_server_refuses_non_agent_socket(self, tmux_server):
+        """kill-server refuses to kill non-agent sockets, and the server survives.
+
+        Runs against an isolated server: this used to target the user's real
+        `default` socket, so a regression in the check would have killed the
+        user's whole tmux session.
+        """
+        non_agent = tmux_server("test-non-agent")
+
+        result = runner.invoke(app, ["-L", non_agent.socket_name, "kill-server"])
         assert result.exit_code == 1
         assert "not an agent socket" in result.output
+        assert non_agent.has_session("placeholder")
 
     def test_kill_server_non_agent_with_force(self):
         """kill-server with --force works on non-agent sockets."""
@@ -1153,88 +1165,62 @@ class TestMoveWindowCommand:
 
 
 class TestStatusEnhanced:
-    """Test enhanced status command with --all flags."""
+    """Test enhanced status command with --all flags.
 
-    def test_status_default_only_shows_claude(self):
-        """Default status only shows the default socket."""
-        from libtmux import Server
+    All sockets come from the tmux_server fixture: isolated, PID-scoped names.
+    These tests used to create and kill the real `claude` socket, killing any
+    agents running there during `make test`.
+    """
 
-        # Create session on claude socket
-        runner.invoke(app, ["new", "status-test"])
+    def test_status_without_all_shows_only_selected_socket(self, tmux_server):
+        """Without --all, status shows the selected socket and no other."""
+        selected = tmux_server("claude-test")
+        tmux_server("claude-test")
 
-        result = runner.invoke(app, ["--json", "status"])
+        result = runner.invoke(app, ["-L", selected.socket_name, "--json", "status"])
         assert result.exit_code == 0
 
         data = json.loads(result.output)
-        assert "sockets" in data
-        assert len(data["sockets"]) == 1
-        assert data["sockets"][0]["socket"] == "claude"
+        assert [s["socket"] for s in data["sockets"]] == [selected.socket_name]
 
-        # Cleanup
-        Server(socket_name="claude").kill()
-
-    def test_status_all_shows_agent_sockets(self):
+    def test_status_all_shows_agent_sockets(self, tmux_server):
         """--all shows all claude* sockets."""
-        from libtmux import Server
-
-        # Create sessions on multiple agent sockets
-        runner.invoke(app, ["-L", "claude", "new", "s1"])
-        runner.invoke(app, ["-L", "claude-other", "new", "s2"])
+        first = tmux_server("claude-test")
+        second = tmux_server("claude-test")
 
         result = runner.invoke(app, ["--json", "status", "--all"])
         assert result.exit_code == 0
 
         data = json.loads(result.output)
         socket_names = [s["socket"] for s in data["sockets"]]
-        assert "claude" in socket_names
-        assert "claude-other" in socket_names
+        assert first.socket_name in socket_names
+        assert second.socket_name in socket_names
 
-        # Cleanup
-        Server(socket_name="claude").kill()
-        Server(socket_name="claude-other").kill()
-
-    def test_status_all_force_shows_everything(self):
+    def test_status_all_force_shows_everything(self, tmux_server):
         """--all --force shows all sockets including non-agent."""
-        from libtmux import Server
-
-        # Create sessions on agent and non-agent sockets
-        runner.invoke(app, ["-L", "claude", "new", "agent"])
-
-        non_agent = Server(socket_name="test-non-agent-status")
-        non_agent.new_session("non-agent")
+        agent = tmux_server("claude-test")
+        non_agent = tmux_server("test-non-agent")
 
         result = runner.invoke(app, ["--json", "--force", "status", "--all"])
         assert result.exit_code == 0
 
         data = json.loads(result.output)
         socket_names = [s["socket"] for s in data["sockets"]]
-        assert "claude" in socket_names
-        assert "test-non-agent-status" in socket_names
+        assert agent.socket_name in socket_names
+        assert non_agent.socket_name in socket_names
 
-        # Cleanup
-        Server(socket_name="claude").kill()
-        non_agent.kill()
-
-    def test_status_all_without_force_excludes_non_agent(self):
+    def test_status_all_without_force_excludes_non_agent(self, tmux_server):
         """--all without --force excludes non-agent sockets."""
-        from libtmux import Server
-
-        # Create both agent and non-agent
-        runner.invoke(app, ["-L", "claude", "new", "agent"])
-
-        non_agent = Server(socket_name="test-non-agent-excl")
-        non_agent.new_session("non-agent")
+        agent = tmux_server("claude-test")
+        non_agent = tmux_server("test-non-agent")
 
         result = runner.invoke(app, ["--json", "status", "--all"])
         assert result.exit_code == 0
 
         data = json.loads(result.output)
         socket_names = [s["socket"] for s in data["sockets"]]
-        assert "test-non-agent-excl" not in socket_names
-
-        # Cleanup
-        Server(socket_name="claude").kill()
-        non_agent.kill()
+        assert agent.socket_name in socket_names
+        assert non_agent.socket_name not in socket_names
 
 
 class TestJsonEnvelope:
@@ -1251,7 +1237,7 @@ class TestJsonEnvelope:
 
     def test_error_json_has_no_rich_markup(self):
         """JSON error messages must not contain Rich markup tags."""
-        result = runner.invoke(app, ["-L", "default", "--json", "status"])
+        result = runner.invoke(app, ["-L", "test-non-agent-unused", "--json", "status"])
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert data["ok"] is False
@@ -1319,7 +1305,7 @@ class TestJsonEnvelope:
 
     def test_socket_validation_json_error(self):
         """Non-agent socket with --json returns JSON error envelope."""
-        result = runner.invoke(app, ["-L", "default", "--json", "status"])
+        result = runner.invoke(app, ["-L", "test-non-agent-unused", "--json", "status"])
         assert_json_error(result, "not an agent socket")
 
     def test_resolve_destination_json_error(self):
