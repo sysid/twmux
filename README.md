@@ -414,6 +414,9 @@ The `send` command:
 4. Sends Enter
 5. Verifies content changed
 6. Retries if needed
+7. If still unchanged, keeps watching (up to 3s, no further Enters) before
+   reporting failure — a still-starting shell runs the queued line late, and a
+   false failure would tempt the caller to send the command twice
 
 ### Marker-Based Execution
 
@@ -469,7 +472,7 @@ wait_result = wait_for_idle(pane, poll_interval=0.2, stable_count=3, timeout=30)
 
 | Module | Exports |
 |--------|---------|
-| `twmux.lib.safe_input` | `send_safe(pane, text, enter=True, enter_delay=0.05) -> SendResult`, `wait_for_idle(pane, poll_interval=0.2, stable_count=3, timeout=30.0) -> WaitResult` |
+| `twmux.lib.safe_input` | `send_safe(pane, text, enter=True, enter_delay=0.05, settle_timeout=3.0) -> SendResult`, `wait_for_idle(pane, poll_interval=0.2, stable_count=3, timeout=30.0) -> WaitResult` |
 | `twmux.lib.execution` | `execute(pane, cmd, timeout=30.0, poll_interval=0.2) -> ExecResult`, `ExecResult(output, exit_code, timed_out)` |
 | `twmux.lib.safety` | `validate_socket(socket_name, force)`, `is_agent_socket(socket_name)`, `enumerate_agent_sockets()`, `SocketValidationError` |
 

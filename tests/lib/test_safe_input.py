@@ -85,3 +85,22 @@ def test_send_safe_no_enter(pane):
     content = pane.capture_pane()
     # The text should appear on the command line
     assert any("test_no_enter" in line for line in content)
+
+
+def test_send_safe_into_still_starting_shell_is_not_reported_as_failed(session):
+    """Regression: a shell that is still starting (slow login profile, loaded
+    machine) consumes the queued line only once it is up. The Enter retries
+    finished in ~0.8s and reported success=False although the command then
+    ran — an agent retrying on that false failure would run it twice."""
+    from twmux.lib.safe_input import send_safe
+
+    # The pane's shell becomes ready only after 1.5s — beyond the Enter retries.
+    window = session.new_window(
+        window_shell="sleep 1.5; exec env -u PROMPT_COMMAND PS1='$ ' bash --noprofile --norc"
+    )
+    pane = window.active_pane
+
+    result = send_safe(pane, "echo late_$((6*7))")
+
+    assert result.success is True
+    assert any(line == "late_42" for line in pane.capture_pane())

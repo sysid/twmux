@@ -78,6 +78,7 @@ def send_safe(
     enter_delay: float = 0.05,
     max_retries: int = 3,
     retry_delay: float = 0.1,
+    settle_timeout: float = 3.0,
 ) -> SendResult:
     """Send text to pane with optional Enter verification.
 
@@ -88,6 +89,8 @@ def send_safe(
         enter_delay: Delay between text and Enter (race condition mitigation)
         max_retries: Maximum Enter retry attempts
         retry_delay: Delay between retries
+        settle_timeout: After the last retry, how long to keep watching for a
+            reaction (e.g. a still-starting shell) before reporting failure
 
     Returns:
         SendResult indicating success and attempt count
@@ -116,5 +119,17 @@ def send_safe(
 
         # Retry with increasing delay
         time.sleep(retry_delay * attempt)
+
+    # No visible reaction yet does not mean the input was lost: a shell that
+    # is still starting consumes the queued line only once it is up. Keep
+    # watching — without more Enters — so that case is not reported as a
+    # failure the caller might "fix" by sending the command twice.
+    # ponytail: fixed window; a target silent for longer is still reported
+    # failed — upgrade path is a caller-supplied timeout if that shows up.
+    deadline = time.monotonic() + settle_timeout
+    while time.monotonic() < deadline:
+        if pane.capture_pane() != content_before:
+            return SendResult(success=True, attempts=max_retries)
+        time.sleep(0.05)
 
     return SendResult(success=False, attempts=max_retries)
