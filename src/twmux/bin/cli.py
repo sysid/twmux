@@ -1073,6 +1073,32 @@ def move_window(
     )
 
 
+@app.command(rich_help_panel="Info")
+def config() -> None:
+    """Edit the agent config (~/.config/twmux/agents.toml) in $EDITOR.
+
+    Seeds the file from the packaged example on first run. The watch daemon
+    reads it only at startup, so restart it after editing.
+
+    JSON: {"ok": true, "path": str, "created": bool} — reports the path
+    without opening an editor, so agents can edit the file directly.
+    Exit: 0 success, 1 if the editor fails.
+    """
+    import click
+
+    from twmux.lib import watch
+
+    # Read at call time (not as a default arg) so tests can redirect it.
+    path = watch.DEFAULT_CONFIG_PATH
+    created = watch.ensure_config(path)
+    if json_output:
+        output_result({"path": str(path), "created": created})
+        return
+
+    click.edit(filename=str(path))
+    rprint(f"{path}\n[dim]restart the watch daemon to apply (no hot reload)[/dim]")
+
+
 # ============================================================================
 # `twmux watch` — multi-agent monitor (subcommand group)
 # ============================================================================

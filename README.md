@@ -550,10 +550,9 @@ file means no panes matched (or the daemon isn't running).
 # Install / upgrade twmux
 uv tool install --upgrade twmux
 
-# Copy the example config and tune the regexes to your agents
-mkdir -p ~/.config/twmux
-cp examples/agents.toml ~/.config/twmux/agents.toml
-$EDITOR ~/.config/twmux/agents.toml
+# Seed ~/.config/twmux/agents.toml from the packaged example on first run,
+# open it in $EDITOR, and tune the regexes to your agents
+twmux config
 
 # Switcher script (matches the existing ~/.config/tmux/tmux-* pattern)
 cp examples/tmux-agent-switcher ~/.config/tmux/
@@ -622,7 +621,7 @@ plist before loading. Run `which twmux` to find your install path.
 ### Operating the daemon
 
 `agents.toml` is **read once at startup** — there's no hot reload. After
-editing the config you have to restart. Here's the full operational matrix:
+editing the config (`twmux config`) you have to restart. Here's the full operational matrix:
 
 For brevity below, set `LABEL=dev.sysid.twmux-watch`. The launchd domain for
 agents in `~/Library/LaunchAgents/` is **`gui/$(id -u)`** (the user's GUI

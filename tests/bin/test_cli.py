@@ -4,6 +4,7 @@ import json
 import re
 import time
 
+import pytest
 from typer.testing import CliRunner
 
 from twmux.bin.cli import app
@@ -1556,3 +1557,42 @@ class TestReattach:
         """
         result = runner.invoke(app, ["--json", "reattach", "--tty", "/dev/no-such-tty-xyz"])
         assert_json_error(result, expected_msg="no tmux pane found")
+
+# --- config subcommand ---
+
+
+class TestConfig:
+    def test_opens_editor_on_config_file(self, tmp_path, monkeypatch):
+        """`twmux config` seeds a missing config, then opens it in $EDITOR."""
+        import click
+
+        from twmux.lib import watch
+
+        path = tmp_path / "twmux" / "agents.toml"
+        monkeypatch.setattr(watch, "DEFAULT_CONFIG_PATH", path)
+        edited = []
+        monkeypatch.setattr(click, "edit", lambda filename: edited.append(filename))
+
+        result = runner.invoke(app, ["config"])
+
+        assert result.exit_code == 0, result.output
+        assert edited == [str(path)]
+        assert path.exists()
+        assert "restart the watch daemon" in result.output
+
+    def test_json_reports_path_without_opening_editor(self, tmp_path, monkeypatch):
+        """Agents can't drive an interactive editor: --json only reports the
+        path (seeding it if missing) so the caller can edit the file itself."""
+        import click
+
+        from twmux.lib import watch
+
+        path = tmp_path / "agents.toml"
+        monkeypatch.setattr(watch, "DEFAULT_CONFIG_PATH", path)
+        monkeypatch.setattr(click, "edit", lambda filename: pytest.fail("editor opened"))
+
+        result = runner.invoke(app, ["--json", "config"])
+
+        data = assert_json_success(result)
+        assert data["path"] == str(path)
+        assert data["created"] is True

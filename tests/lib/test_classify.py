@@ -190,13 +190,13 @@ def test_idle_matches_prompt_line_anywhere_in_capture():
 
 # -- Codex CLI classification --------------------------------------------------
 
-EXAMPLE_AGENTS_CONFIG = Path(__file__).parents[2] / "examples" / "agents.toml"
+EXAMPLE_AGENTS_CONFIG = Path(__file__).parents[2] / "src" / "twmux" / "agents.toml"
 
 
 def _shipped_codex_config() -> tuple[AgentConfig, list[AgentConfig]]:
     agents = load_config(EXAMPLE_AGENTS_CONFIG).agents
     codex = next((agent for agent in agents if agent.name == "codex_cli"), None)
-    assert codex is not None, "examples/agents.toml must ship a codex_cli block"
+    assert codex is not None, "src/twmux/agents.toml must ship a codex_cli block"
     return codex, agents
 
 
@@ -239,7 +239,7 @@ def test_codex_does_not_claim_unrelated_node_process():
 def _shipped_copilot_config() -> tuple[AgentConfig, list[AgentConfig]]:
     agents = load_config(EXAMPLE_AGENTS_CONFIG).agents
     copilot = next((agent for agent in agents if agent.name == "copilot_cli"), None)
-    assert copilot is not None, "examples/agents.toml must ship a copilot_cli block"
+    assert copilot is not None, "src/twmux/agents.toml must ship a copilot_cli block"
     return copilot, agents
 
 

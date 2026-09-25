@@ -17,6 +17,7 @@ import sys
 import time
 import tomllib
 from dataclasses import dataclass
+from importlib import resources
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -116,6 +117,20 @@ class Config:
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "twmux" / "agents.toml"
+EXAMPLE_CONFIG = resources.files("twmux") / "agents.toml"
+
+
+def ensure_config(path: Path = DEFAULT_CONFIG_PATH) -> bool:
+    """Seed the config from the packaged example if missing.
+
+    Returns True if the file was created. An existing file is never touched —
+    it holds the user's tuned regexes.
+    """
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(EXAMPLE_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+    return True
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:

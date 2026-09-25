@@ -1,7 +1,8 @@
 # twmux watch — agent classification config.
 #
-# Copy this file to ~/.config/twmux/agents.toml and tune the regexes to
-# match the TUIs of the agents you actually run.
+# `twmux config` seeds ~/.config/twmux/agents.toml from this file on first
+# run and opens it in $EDITOR. Tune the regexes to match the TUIs of the
+# agents you actually run.
 #
 # How it works:
 #   - cmd_match    : regex on the pane's current command (libtmux

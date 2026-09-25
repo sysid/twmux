@@ -2,7 +2,9 @@
 
 from twmux.lib.watch import (
     AgentRow,
+    ensure_config,
     format_wait,
+    load_config,
     merge_state,
     render_tsv,
     sort_rows,
@@ -255,3 +257,30 @@ def test_setup_logging_uses_rotating_file_handler(tmp_path):
         logger.removeHandler(h)
         h.close()
     logging.shutdown()
+
+
+# -- ensure_config -------------------------------------------------------------
+
+
+def test_ensure_config_seeds_missing_file_from_packaged_example(tmp_path):
+    """First run: no config yet → the packaged example is copied in (parent
+    dirs included), so a fresh install gets working agent matchers."""
+    path = tmp_path / "twmux" / "agents.toml"
+
+    created = ensure_config(path)
+
+    assert created is True
+    agent_names = [agent.name for agent in load_config(path).agents]
+    assert "claude_code" in agent_names
+    assert "copilot_cli" in agent_names
+
+
+def test_ensure_config_leaves_existing_file_untouched(tmp_path):
+    """A user-tuned config must never be overwritten by the example."""
+    path = tmp_path / "agents.toml"
+    path.write_text("poll_interval = 5.0\n")
+
+    created = ensure_config(path)
+
+    assert created is False
+    assert path.read_text() == "poll_interval = 5.0\n"
