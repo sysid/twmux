@@ -243,12 +243,31 @@ def _shipped_copilot_config() -> tuple[AgentConfig, list[AgentConfig]]:
     return copilot, agents
 
 
-# Identity is the pane title ("<task> - GitHub Copilot") AND content_match —
-# the UNION of the per-state footers (idle help line, working status line,
-# question confirm hint) — so a pane is recognised whatever state Copilot is
-# in. Earlier content_match gated only on the idle footer, which made
-# working/question panes vanish from the switcher.
+# Identity is the pane title ("<task> - GitHub Copilot") alone. A footer-based
+# content_match used to be ANDed on top, and every Copilot footer rewording
+# (idle-only gate, then "esc cancel" → "esc interrupt") made panes vanish
+# from the switcher.
 COPILOT, _ = _shipped_copilot_config()
+
+
+def test_copilot_is_identified_by_title_whatever_the_footer_says():
+    """Regression: Copilot renamed its working footer from 'esc cancel' to
+    'esc interrupt', the footer-based content_match stopped matching, and the
+    working pane disappeared from the switcher. The title is the identity; an
+    unrecognised footer must only degrade the state, never hide the pane."""
+    copilot, agents = _shipped_copilot_config()
+    pane = " some footer wording Copilot has not invented yet\n"
+
+    assert _match_agent("uv", "Check Contracts - GitHub Copilot", agents, content=pane) is copilot
+    assert copilot.content_match is None
+
+
+def test_copilot_working_footer_with_esc_interrupt():
+    """Current Copilot working footer (observed live): '◉ Working · 65.6 KiB
+    esc interrupt'."""
+    pane = " ◉ Working · 65.6 KiB esc interrupt                  Claude Opus 4.8\n"
+    assert _match_agent("uv", "Fix bug - GitHub Copilot", [COPILOT], content=pane) is COPILOT
+    assert classify(pane, COPILOT) == "working"
 
 
 def test_copilot_is_identified_by_title_when_launched_through_a_wrapper():
@@ -301,10 +320,9 @@ def test_copilot_idle_with_update_banner_has_no_prompt_glyph():
 
 
 def test_copilot_working_pane_is_identified_and_classified():
-    """The core fix: a real working pane shows only the 'Working · … esc
-    cancel' footer — NOT the idle help footer. It must still be identified as
-    Copilot (content_match) AND classified working. The old idle-only
-    content_match dropped it, so re_working was dead code."""
+    """Older Copilot working footer 'Working · … esc cancel' — NOT the idle
+    help footer. It must still be identified as Copilot AND classified
+    working."""
     pane = "◉ Working · 3.7 KiB esc cancel                       Claude Opus 4.8\n"
     assert _match_agent("node", "Fix bug - GitHub Copilot", [COPILOT], content=pane) is COPILOT
     assert classify(pane, COPILOT) == "working"

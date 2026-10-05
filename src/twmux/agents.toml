@@ -92,21 +92,18 @@ re_idle    = "^> "
 # `uv run srti-wrap -c copilot`) it is "uv", and cmd_match = "^node$" silently
 # dropped every wrapped Copilot pane from the switcher.
 title_match   = "GitHub Copilot$"
-# Copilot's footer chrome differs per state, so content_match is the UNION of
-# the per-state footers — NOT just the idle one. Gating on only the idle
-# footer made working/question panes lose their footer, fail identification,
-# and vanish from the switcher.
-# ponytail: brittle to Copilot UI-string changes — the title alone is the
-# fallback identity if the footers drift again.
-content_match = "/ commands · \\? help|Working · .* esc cancel|enter to confirm · esc to cancel"
+# No content_match: the title is specific enough on its own. A footer-based
+# content_match used to be ANDed on top, and every Copilot footer rewording
+# (e.g. "esc cancel" → "esc interrupt") silently hid panes from the switcher.
+# Footer drift now only degrades the state to "unknown", never the identity.
 # Idle: the help footer, shown whenever Copilot sits at its prompt (with or
 # without an "update available" banner). More reliable than the ❯ glyph,
 # which the update banner suppresses.
 re_idle       = "/ commands · \\? help"
-# Working: current footer is "◉ Working · <size> esc cancel" (spinner glyph
-# varies, so anchor on the stable tail).
-re_working    = "Working · .* esc cancel"
+# Working: footer is "◉ Working · <size> esc interrupt" (older releases: "esc
+# cancel"; spinner glyph varies, so anchor on the stable tail).
+re_working    = "Working · .* esc (?:cancel|interrupt)"
 # Wait: an ask_user choice box shows this confirm/cancel hint. Checked before
 # working, so a question never misreads as working — note the "to": the
-# working footer says "esc cancel", the question says "esc to cancel".
+# working footer never says "esc to cancel", the question does.
 re_wait       = "enter to confirm · esc to cancel"
