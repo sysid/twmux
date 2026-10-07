@@ -9,7 +9,7 @@ from typer.core import TyperGroup
 
 from twmux.lib.safety import DEFAULT_SOCKET, SocketValidationError, validate_socket
 
-__version__ = "0.11.1"
+__version__ = "0.11.2"
 
 app = typer.Typer(
     help="Race-condition-safe tmux wrapper for coding agents.",
