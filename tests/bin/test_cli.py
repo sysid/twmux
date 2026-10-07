@@ -4,7 +4,6 @@ import json
 import re
 import time
 
-import pytest
 from typer.testing import CliRunner
 
 from twmux.bin.cli import app
@@ -1544,37 +1543,103 @@ class TestReattach:
 
 
 class TestConfig:
+    @staticmethod
+    def fake_editor(tmp_path, exit_code=0):
+        """A stand-in $EDITOR that records its argv, one arg per line."""
+        log = tmp_path / "editor.log"
+        script = tmp_path / "fake-editor"
+        script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" >> "{log}"\nexit {exit_code}\n')
+        script.chmod(0o755)
+        return script, log
+
     def test_opens_editor_on_config_file(self, tmp_path, monkeypatch):
         """`twmux config` seeds a missing config, then opens it in $EDITOR."""
-        import click
-
         from twmux.lib import watch
 
         path = tmp_path / "twmux" / "agents.toml"
         monkeypatch.setattr(watch, "DEFAULT_CONFIG_PATH", path)
-        edited = []
-        monkeypatch.setattr(click, "edit", lambda filename: edited.append(filename))
+        editor, log = self.fake_editor(tmp_path)
+        monkeypatch.delenv("VISUAL", raising=False)
+        monkeypatch.setenv("EDITOR", str(editor))
 
         result = runner.invoke(app, ["config"])
 
         assert result.exit_code == 0, result.output
-        assert edited == [str(path)]
+        assert log.read_text().splitlines() == [str(path)]
         assert path.exists()
         assert "restart the watch daemon" in result.output
 
-    def test_json_reports_path_without_opening_editor(self, tmp_path, monkeypatch):
-        """Agents can't drive an interactive editor: --json only reports the
-        path (seeding it if missing) so the caller can edit the file itself."""
-        import click
-
+    def test_editor_command_with_arguments_is_split_like_a_shell(self, tmp_path, monkeypatch):
+        """EDITOR="code --wait" is a common setup: the value is a command line,
+        not a single executable name."""
         from twmux.lib import watch
 
         path = tmp_path / "agents.toml"
         monkeypatch.setattr(watch, "DEFAULT_CONFIG_PATH", path)
-        monkeypatch.setattr(click, "edit", lambda filename: pytest.fail("editor opened"))
+        editor, log = self.fake_editor(tmp_path)
+        monkeypatch.delenv("VISUAL", raising=False)
+        monkeypatch.setenv("EDITOR", f"{editor} --wait")
+
+        result = runner.invoke(app, ["config"])
+
+        assert result.exit_code == 0, result.output
+        assert log.read_text().splitlines() == ["--wait", str(path)]
+
+    def test_visual_takes_precedence_over_editor(self, tmp_path, monkeypatch):
+        """Unix convention: $VISUAL is the full-screen editor and wins over $EDITOR."""
+        from twmux.lib import watch
+
+        path = tmp_path / "agents.toml"
+        monkeypatch.setattr(watch, "DEFAULT_CONFIG_PATH", path)
+        visual, log = self.fake_editor(tmp_path)
+        monkeypatch.setenv("VISUAL", str(visual))
+        monkeypatch.setenv("EDITOR", "/nonexistent/editor")
+
+        result = runner.invoke(app, ["config"])
+
+        assert result.exit_code == 0, result.output
+        assert log.read_text().splitlines() == [str(path)]
+
+    def test_editor_failure_exits_1(self, tmp_path, monkeypatch):
+        """A non-zero editor exit is reported, not silently swallowed."""
+        from twmux.lib import watch
+
+        monkeypatch.setattr(watch, "DEFAULT_CONFIG_PATH", tmp_path / "agents.toml")
+        editor, _log = self.fake_editor(tmp_path, exit_code=3)
+        monkeypatch.delenv("VISUAL", raising=False)
+        monkeypatch.setenv("EDITOR", str(editor))
+
+        result = runner.invoke(app, ["config"])
+
+        assert result.exit_code == 1
+        assert "exited with status 3" in result.output
+
+    def test_missing_editor_exits_1(self, tmp_path, monkeypatch):
+        from twmux.lib import watch
+
+        monkeypatch.setattr(watch, "DEFAULT_CONFIG_PATH", tmp_path / "agents.toml")
+        monkeypatch.delenv("VISUAL", raising=False)
+        monkeypatch.setenv("EDITOR", "/nonexistent/editor")
+
+        result = runner.invoke(app, ["config"])
+
+        assert result.exit_code == 1
+        assert "/nonexistent/editor" in result.output
+
+    def test_json_reports_path_without_opening_editor(self, tmp_path, monkeypatch):
+        """Agents can't drive an interactive editor: --json only reports the
+        path (seeding it if missing) so the caller can edit the file itself."""
+        from twmux.lib import watch
+
+        path = tmp_path / "agents.toml"
+        monkeypatch.setattr(watch, "DEFAULT_CONFIG_PATH", path)
+        editor, log = self.fake_editor(tmp_path)
+        monkeypatch.delenv("VISUAL", raising=False)
+        monkeypatch.setenv("EDITOR", str(editor))
 
         result = runner.invoke(app, ["--json", "config"])
 
         data = assert_json_success(result)
         assert data["path"] == str(path)
         assert data["created"] is True
+        assert not log.exists(), "editor opened"

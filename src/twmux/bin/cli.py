@@ -4,8 +4,8 @@ import json as json_lib
 from typing import Annotated, TypedDict
 
 import typer
-from click import Group
 from rich import print as rprint
+from typer.core import TyperGroup
 
 from twmux.lib.safety import DEFAULT_SOCKET, SocketValidationError, validate_socket
 
@@ -94,8 +94,8 @@ def main(
             raise typer.Exit(0)
         if json_output:
             # Machine-discoverable command listing for agents
-            if not isinstance(ctx.command, Group):
-                raise RuntimeError("twmux root command must be a Click group")
+            if not isinstance(ctx.command, TyperGroup):
+                raise RuntimeError("twmux root command must be a Typer group")
             commands = []
             for name in sorted(ctx.command.list_commands(ctx)):
                 cmd = ctx.command.get_command(ctx, name)
@@ -1084,7 +1084,9 @@ def config() -> None:
     without opening an editor, so agents can edit the file directly.
     Exit: 0 success, 1 if the editor fails.
     """
-    import click
+    import os
+    import shlex
+    import subprocess
 
     from twmux.lib import watch
 
@@ -1095,7 +1097,17 @@ def config() -> None:
         output_result({"path": str(path), "created": created})
         return
 
-    click.edit(filename=str(path))
+    # ponytail: minimal $VISUAL/$EDITOR launcher; typer>=0.26 dropped click.edit.
+    # No Windows quoting or GUI-editor detection — add if twmux ever leaves Unix.
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    try:
+        status = subprocess.run([*shlex.split(editor), str(path)]).returncode
+    except OSError as e:
+        error_result(f"Cannot start editor '{editor}': {e}")
+        raise typer.Exit(1)
+    if status != 0:
+        error_result(f"Editor '{editor}' exited with status {status}")
+        raise typer.Exit(1)
     rprint(f"{path}\n[dim]restart the watch daemon to apply (no hot reload)[/dim]")
 
 

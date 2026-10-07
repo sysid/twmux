@@ -774,8 +774,11 @@ To confirm the install is editable (one-time sanity check):
 Caveats:
 
 - **Dependency changes** still require a reinstall. If you bump a dep in
-  `pyproject.toml`, run `uv tool install --editable --reinstall …` to refresh
-  the tool's isolated venv.
+  `pyproject.toml`, run `make install` to refresh the tool's isolated venv.
+- **`uv tool install` ignores `uv.lock`** and resolves the newest versions
+  allowed by `pyproject.toml`. `make install` passes the locked versions as
+  constraints (`uv export … | uv tool install -c`), so the tool runs what the
+  tests ran against. Upgrade on purpose with `uv lock --upgrade`.
 - **Same Python process keeps old code in memory** — Python imports are
   cached per process. Editable means source edits are visible *on next
   process start*, not in an already-running daemon. The kickstart in step 3

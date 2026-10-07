@@ -64,8 +64,10 @@ publish:  ## Upload to PyPI
 	uv run twine upload --verbose dist/*
 
 .PHONY: install
-install: uninstall  ## Install via uv tool
-	uv tool install -e .
+install: uninstall  ## Install via uv tool, pinned to uv.lock
+	@# uv tool install ignores uv.lock; constrain it so the tool runs the versions tests ran against.
+	@c=$$(mktemp) && uv export --frozen --no-hashes --no-dev --no-emit-project -q -o $$c \
+		&& uv tool install -e . -c $$c; rc=$$?; rm -f $$c; exit $$rc
 	twmux --install-completion bash
 
 .PHONY: uninstall
