@@ -98,12 +98,16 @@ title_match   = "GitHub Copilot$"
 # Footer drift now only degrades the state to "unknown", never the identity.
 # Idle: the help footer, shown whenever Copilot sits at its prompt (with or
 # without an "update available" banner). More reliable than the ❯ glyph,
-# which the update banner suppresses.
-re_idle       = "/ commands · \\? help"
+# which the update banner suppresses. With a draft typed into the prompt the
+# help hint becomes "@ files · # issues".
+re_idle       = "/ commands · \\? help|@ files · # issues"
 # Working: footer is "◉ Working · <size> esc interrupt" (older releases: "esc
 # cancel"; spinner glyph varies, so anchor on the stable tail).
 re_working    = "Working · .* esc (?:cancel|interrupt)"
 # Wait: an ask_user choice box shows this confirm/cancel hint. Checked before
 # working, so a question never misreads as working — note the "to": the
 # working footer never says "esc to cancel", the question does.
-re_wait       = "enter to confirm · esc to cancel"
+# Current releases reword it to "enter accept · tab next · ctrl+d decline · esc
+# cancel"; anchor on "enter accept", since the older working footer also ends
+# in "esc cancel".
+re_wait       = "enter to confirm · esc to cancel|enter accept · .*esc cancel"

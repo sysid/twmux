@@ -340,3 +340,39 @@ def test_copilot_wait_on_ask_user_choice_box():
     )
     assert _match_agent("node", "Fix bug - GitHub Copilot", [COPILOT], content=pane) is COPILOT
     assert classify(pane, COPILOT) == "wait"
+
+
+def test_copilot_wait_on_current_question_footer():
+    """Regression: Copilot reworded the ask_user hint to 'enter accept · tab
+    next · ctrl+d decline · esc cancel' (observed live). The old re_wait only
+    knew 'enter to confirm · esc to cancel', so a pane blocked on a question
+    classified 'unknown' and sorted to the bottom of the switcher."""
+    pane = (
+        "Copilot needs information.\n"
+        " 1. Horizon of the KB  2. Who owns the foundations\n"
+        " ❯ Unknown yet; keep it open\n"
+        "   Other (type your answer)\n"
+        " ↑/↓ select · enter accept · tab next · ctrl+d decline · esc cancel\n"
+        "────────────────────────────────────────────────────────────────\n"
+    )
+    assert classify(pane, COPILOT) == "wait"
+
+
+def test_copilot_working_footer_is_not_mistaken_for_a_question():
+    """Both working footers end in an 'esc …' hint, like the question footer.
+    re_wait is checked first, so it must not fire on either of them."""
+    assert classify("◉ Working · 3.7 KiB esc cancel\n", COPILOT) == "working"
+    assert classify("◉ Working · 65.6 KiB esc interrupt\n", COPILOT) == "working"
+
+
+def test_copilot_idle_with_draft_in_prompt():
+    """Once text is typed into the prompt, Copilot swaps the '/ commands · ?
+    help' footer for '@ files · # issues' (observed live). That is still idle
+    — the agent is not working and asks nothing."""
+    pane = (
+        "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+        "┃ j\n"
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        " Interactive · Allow All · @ files · # issues        GitHub Copilot • Claude Opus 5.5\n"
+    )
+    assert classify(pane, COPILOT) == "idle"
