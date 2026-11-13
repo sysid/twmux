@@ -520,6 +520,48 @@ tmux switcher.
    dashboard, the preview pane shows live agent output, and Enter jumps you to
    the corresponding pane.
 
+### Agent hooks — let agents report their own state (recommended)
+
+Regexes guess at a TUI that changes with every agent release, and a busy agent
+can read as `idle` for a poll between two status-line redraws. Agents with
+lifecycle hooks can instead report their state directly:
+
+```bash
+twmux mark working|wait|done|clear [--agent NAME]
+```
+
+`mark` writes tmux **pane options** (`@twmux_state`, `@twmux_state_ts`,
+`@twmux_cmd`, `@twmux_agent`) on the pane the hook runs in — it finds the pane
+from the `$TMUX`/`$TMUX_PANE` the hook inherits from the agent. The state lives
+and dies with the pane: no files, nothing to clean up. The daemon reads it in
+the same `list-panes` call as everything else.
+
+Rules the daemon applies:
+
+- A hook state beats the regex state, **except** a `wait` prompt on screen,
+  which always wins (some permission prompts emit no hook).
+- `done` reads as the agent being back at its prompt (`idle`).
+- A mark recorded while the pane ran another command than it runs now (the
+  agent exited back to the shell) is ignored.
+- A marked pane is listed even when no `agents.toml` regex recognises it;
+  `--agent` names it.
+
+`mark` prints nothing (Claude Code feeds some hooks' stdout to the model) and
+is a no-op outside tmux, with `TWMUX_NO_MARK=1` (set it on nested agents), or
+inside a Claude background job (`CLAUDE_JOB_DIR`).
+
+Hook configs to merge into your agent settings:
+
+| Agent | File | Merge into |
+| --- | --- | --- |
+| Claude Code | `examples/hooks/claude-code-settings.json` | `~/.claude/settings.json` |
+| Copilot CLI | `examples/hooks/copilot-hooks.json` | `~/.copilot/hooks/twmux.json` |
+| Codex | `examples/hooks/codex-hooks.json` | `~/.codex/hooks.json` (needs `[features] hooks = true`) |
+
+The Copilot and Codex event names are adapted from
+[workmux](https://github.com/raine/workmux)'s hook files and are untested here.
+Agents without hooks (e.g. aider) keep working through the regexes alone.
+
 ### The `agents.tsv` file
 
 The daemon's only output is a single file, atomically rewritten every
@@ -715,6 +757,7 @@ twmux watch daemon                   # foreground poll loop (Ctrl-C to stop)
 twmux watch daemon --ensure-running  # exit silently if a daemon is running
 twmux watch stop                     # SIGTERM the running daemon, wait for exit
 twmux watch status                   # one-shot TSV dump for debugging
+twmux mark working --agent NAME      # agent hooks: report state (see above)
 ```
 
 See **Operating the daemon** above for the full start/stop/restart matrix

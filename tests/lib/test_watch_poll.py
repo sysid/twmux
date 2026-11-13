@@ -41,3 +41,73 @@ def test_poll_server_keys_state_by_socket_and_pane(session, pane):
     assert row.state_entered_at == 100.0
     assert state_map[other_socket] == ("working", 1.0)
     assert state_map[(session.server.socket_name, pane.pane_id)] == ("idle", 100.0)
+
+
+def mark(pane, state, agent="", command=None):
+    """What `twmux mark` writes: state, time, the pane's command, agent name."""
+    pane.cmd("set-option", "-p", "-t", pane.pane_id, "@twmux_state", state)
+    pane.cmd("set-option", "-p", "-t", pane.pane_id, "@twmux_state_ts", "1700000000")
+    if command is None:
+        pane.cmd("set-option", "-pF", "-t", pane.pane_id, "@twmux_cmd", "#{pane_current_command}")
+    else:
+        pane.cmd("set-option", "-p", "-t", pane.pane_id, "@twmux_cmd", command)
+    if agent:
+        pane.cmd("set-option", "-p", "-t", pane.pane_id, "@twmux_agent", agent)
+
+
+def poll(session):
+    return poll_server(session.server, Config(poll_interval=2.0, agents=[FAKE_AGENT]), {}, 100.0)
+
+
+def test_hook_state_wins_over_the_screen(session, pane):
+    """The screen shows an idle prompt, but the agent's hook says it is
+    working — the hook knows, the regex guesses."""
+    pane.cmd("select-pane", "-T", "fake-agent: x")
+    mark(pane, "working")
+
+    (row,) = poll(session)
+
+    assert row.state == "working"
+
+
+def test_wait_on_screen_wins_over_hook_working(session, pane):
+    """Some agents show permission prompts without emitting a hook; a visible
+    wait prompt is never hidden behind a stale 'working'."""
+    waiting = AgentConfig(name="fake_agent", title_match="^fake-agent", re_wait=r"^\$")
+    pane.cmd("select-pane", "-T", "fake-agent: x")
+    mark(pane, "working")
+
+    (row,) = poll_server(session.server, Config(2.0, [waiting]), {}, 100.0)
+
+    assert row.state == "wait"
+
+
+def test_marked_pane_is_an_agent_even_if_no_regex_claims_it(session, pane):
+    """Identity from the hook survives title/command drift of the agent TUI."""
+    pane.cmd("select-pane", "-T", "something unrecognisable")
+    mark(pane, "wait", agent="claude_code")
+
+    (row,) = poll(session)
+
+    assert row.agent == "claude_code"
+    assert row.state == "wait"
+
+
+def test_hook_state_of_an_exited_agent_is_ignored(session, pane):
+    """The pane options outlive the agent process: once the pane runs another
+    command than the one that marked it, the mark is stale."""
+    pane.cmd("select-pane", "-T", "fake-agent: x")
+    mark(pane, "working", command="2.1.139")
+
+    (row,) = poll(session)
+
+    assert row.state == "idle"
+
+
+def test_hook_done_reads_as_idle(session, pane):
+    pane.cmd("select-pane", "-T", "something unrecognisable")
+    mark(pane, "done", agent="claude_code")
+
+    (row,) = poll(session)
+
+    assert row.state == "idle"

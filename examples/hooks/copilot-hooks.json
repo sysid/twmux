@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "type": "command", "bash": "twmux mark clear" }],
+    "userPromptSubmitted": [
+      { "type": "command", "bash": "twmux mark working --agent copilot_cli" }
+    ],
+    "postToolUse": [{ "type": "command", "bash": "twmux mark working --agent copilot_cli" }],
+    "postToolUseFailure": [
+      { "type": "command", "bash": "twmux mark working --agent copilot_cli" }
+    ],
+    "notification": [
+      {
+        "type": "command",
+        "matcher": "permission_prompt|elicitation_dialog",
+        "bash": "twmux mark wait --agent copilot_cli"
+      }
+    ],
+    "agentStop": [{ "type": "command", "bash": "twmux mark done --agent copilot_cli" }]
+  }
+}

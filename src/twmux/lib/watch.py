@@ -23,6 +23,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from twmux.lib.classify import AgentConfig, classify
+from twmux.lib.mark import HOOK_STATES, OPT_AGENT, OPT_CMD, OPT_STATE
 from twmux.lib.safety import enumerate_all_sockets, get_socket_dir
 
 State = str  # "wait" | "working" | "idle" | "unknown"
@@ -107,6 +108,19 @@ def render_tsv(rows: list[AgentRow], now: float) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+def observe_state(hook_state: State | None, scraped: State) -> State:
+    """Combine the agent's own report with what the screen shows.
+
+    The hook is authoritative — it comes from the agent, not from a regex
+    guessing at its TUI — except that a wait prompt on screen always wins:
+    some agents show permission prompts without emitting a hook. A hook
+    "done" means the agent is back at its prompt: idle.
+    """
+    if scraped == "wait" or hook_state is None:
+        return scraped
+    return "idle" if hook_state == "done" else hook_state
+
+
 # Unit separator: cannot appear in session names or paths and is vanishingly
 # rare in pane titles; a line with the wrong field count is dropped.
 _SEP = "\x1f"
@@ -122,6 +136,9 @@ SNAPSHOT_FORMAT = _SEP.join(
         "#{pane_index}",
         "#{window_active}",
         "#{session_attached}",
+        f"#{{{OPT_STATE}}}",
+        f"#{{{OPT_CMD}}}",
+        f"#{{{OPT_AGENT}}}",
     ]
 )
 _SNAPSHOT_FIELDS = SNAPSHOT_FORMAT.count(_SEP) + 1
@@ -138,6 +155,8 @@ class PaneInfo:
     target: str  # session:window.pane address for tmux commands
     window_id: str
     visible: bool  # its window is the active one of an attached session
+    hook_state: State | None = None  # from `twmux mark`, None when absent or stale
+    hook_agent: str = ""
 
 
 def parse_snapshot(lines: list[str]) -> list[PaneInfo]:
@@ -148,7 +167,10 @@ def parse_snapshot(lines: list[str]) -> list[PaneInfo]:
         if len(fields) != _SNAPSHOT_FIELDS:
             continue
         (pane_id, command, title, path, session, window_id, window_index, pane_index,
-         window_active, session_attached) = fields  # fmt: skip
+         window_active, session_attached, hook_state, hook_cmd, hook_agent) = fields  # fmt: skip
+        # A mark made under another command belongs to an agent that has
+        # since exited from this pane (e.g. "2.1.139" -> "bash").
+        valid_hook = hook_state in HOOK_STATES and hook_cmd == command
         panes.append(
             PaneInfo(
                 pane_id=pane_id,
@@ -158,6 +180,8 @@ def parse_snapshot(lines: list[str]) -> list[PaneInfo]:
                 target=f"{session}:{window_index}.{pane_index}",
                 window_id=window_id,
                 visible=window_active == "1" and session_attached not in ("", "0"),
+                hook_state=hook_state if valid_hook else None,
+                hook_agent=hook_agent if valid_hook else "",
             )
         )
     return panes
@@ -351,18 +375,22 @@ def poll_server(
 
     rows: list[AgentRow] = []
     for pane in snapshot:
-        # Capture only panes some agent claims by command or title: capturing
-        # is the expensive part, and most panes are plain shells and editors.
-        if not any(_hits_cmd_or_title(c, pane.command, pane.title) for c in config.agents):
+        # Capture only panes that are agents by their own mark or that some
+        # config claims by command or title: capturing is the expensive part,
+        # and most panes are plain shells and editors.
+        claimed = any(_hits_cmd_or_title(c, pane.command, pane.title) for c in config.agents)
+        if not claimed and pane.hook_state is None:
             continue
         captured = server.cmd("capture-pane", "-p", "-t", pane.pane_id).stdout
         text = "\n".join(captured)
         cfg = _match_agent(pane.command, pane.title, config.agents, content=text)
-        if cfg is None:
+        if cfg is None and pane.hook_state is None:
             continue
 
+        scraped = classify(text, cfg) if cfg else "unknown"
+        observed = observe_state(pane.hook_state, scraped)
         key = (socket, pane.pane_id)
-        state, entered = merge_state(state_map.get(key), classify(text, cfg), now)
+        state, entered = merge_state(state_map.get(key), observed, now)
         state_map[key] = (state, entered)
         rows.append(
             AgentRow(
@@ -370,7 +398,7 @@ def poll_server(
                 socket=socket,
                 target=pane.target,
                 project=_basename_cwd(pane.path),
-                agent=cfg.name,
+                agent=cfg.name if cfg else (pane.hook_agent or "agent"),
                 state=state,
                 state_entered_at=entered,
                 title=pane.title,

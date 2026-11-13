@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "twmux mark clear" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "twmux mark working --agent claude_code" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "twmux mark working --agent claude_code" }] }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog",
+        "hooks": [{ "type": "command", "command": "twmux mark wait --agent claude_code" }]
+      }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "twmux mark done --agent claude_code" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "twmux mark clear" }] }
+    ]
+  }
+}

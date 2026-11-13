@@ -421,6 +421,58 @@ def interrupt(
 
 
 @app.command(
+    rich_help_panel="Pane Control",
+    epilog="""
+[bold]Examples[/bold] (run by an agent's lifecycle hooks, see README)
+
+twmux mark working --agent claude_code
+
+twmux mark clear
+""",
+)
+def mark(
+    state: Annotated[str, typer.Argument(help="working | wait | done | clear")],
+    agent: Annotated[str, typer.Option("--agent", help="Agent name shown by `twmux watch`")] = "",
+) -> None:
+    """Record this pane's agent state for `twmux watch` (for agent hooks).
+
+    Targets the pane the calling process runs in ($TMUX, $TMUX_PANE), on
+    whatever server that is — the -L socket policy does not apply, as the
+    only effect is a user option on the caller's own pane.
+
+    Silent in human mode: Claude Code feeds some hooks' stdout to the model.
+    No-op (exit 0) outside tmux, with TWMUX_NO_MARK set, or in a Claude
+    background job (CLAUDE_JOB_DIR).
+
+    JSON: {"ok": true, "marked": bool, "pane_id": str, "state": str}
+    Exit: 0 success or no-op, 1 on invalid state or tmux failure.
+    """
+    from libtmux import Server
+
+    from twmux.lib.mark import HOOK_STATES, hook_pane_from_env, mark_pane, opted_out
+
+    if state not in (*HOOK_STATES, "clear"):
+        error_result(f"Invalid state '{state}': use {', '.join(HOOK_STATES)} or clear")
+        raise typer.Exit(1)
+
+    hook_pane = hook_pane_from_env()
+    if hook_pane is None or opted_out():
+        if json_output:
+            output_result({"marked": False})
+        return
+
+    socket_path, pane_id = hook_pane
+    try:
+        mark_pane(Server(socket_path=socket_path), pane_id, state, agent)
+    except Exception as e:
+        error_result(f"Cannot mark pane {pane_id}: {e}")
+        raise typer.Exit(1)
+
+    if json_output:
+        output_result({"marked": True, "pane_id": pane_id, "state": state})
+
+
+@app.command(
     rich_help_panel="Pane Management",
     epilog="""
 [bold]Examples[/bold]

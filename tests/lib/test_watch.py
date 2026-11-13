@@ -295,7 +295,7 @@ def test_parse_snapshot_reads_one_pane_per_line():
     from twmux.lib.watch import parse_snapshot
 
     line = "\x1f".join(
-        ["%7", "node", "⠐ codex | fix", "/src/proj", "work", "@3", "2", "1", "1", "1"]
+        ["%7", "node", "⠐ codex | fix", "/src/proj", "work", "@3", "2", "1", "1", "1", "", "", ""]
     )
 
     (pane,) = parse_snapshot([line])
@@ -312,7 +312,7 @@ def test_parse_snapshot_reads_one_pane_per_line():
 def test_parse_snapshot_pane_in_inactive_window_is_not_visible():
     from twmux.lib.watch import parse_snapshot
 
-    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "0", "1"])
+    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "0", "1", "", "", ""])
 
     (pane,) = parse_snapshot([line])
 
@@ -322,7 +322,7 @@ def test_parse_snapshot_pane_in_inactive_window_is_not_visible():
 def test_parse_snapshot_pane_in_detached_session_is_not_visible():
     from twmux.lib.watch import parse_snapshot
 
-    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "1", "0"])
+    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "1", "0", "", "", ""])
 
     (pane,) = parse_snapshot([line])
 
@@ -335,3 +335,40 @@ def test_parse_snapshot_skips_malformed_lines():
     from twmux.lib.watch import parse_snapshot
 
     assert parse_snapshot(["garbage", ""]) == []
+
+
+def test_parse_snapshot_reads_the_hook_mark_made_under_the_current_command():
+    from twmux.lib.watch import parse_snapshot
+
+    line = "\x1f".join(
+        ["%7", "2.1.139", "x", "/", "s", "@3", "2", "1", "1", "1", "wait", "2.1.139", "cc"]
+    )
+
+    (pane,) = parse_snapshot([line])
+
+    assert pane.hook_state == "wait"
+    assert pane.hook_agent == "cc"
+
+
+def test_parse_snapshot_drops_the_hook_mark_once_the_command_changed():
+    """The agent exited and the pane is back at its shell: the mark is stale."""
+    from twmux.lib.watch import parse_snapshot
+
+    line = "\x1f".join(
+        ["%7", "bash", "x", "/", "s", "@3", "2", "1", "1", "1", "wait", "2.1.139", "cc"]
+    )
+
+    (pane,) = parse_snapshot([line])
+
+    assert pane.hook_state is None
+    assert pane.hook_agent == ""
+
+
+def test_parse_snapshot_ignores_an_unknown_hook_state():
+    from twmux.lib.watch import parse_snapshot
+
+    line = "\x1f".join(["%7", "bash", "x", "/", "s", "@3", "2", "1", "1", "1", "busy", "bash", ""])
+
+    (pane,) = parse_snapshot([line])
+
+    assert pane.hook_state is None
