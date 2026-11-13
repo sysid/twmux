@@ -628,6 +628,16 @@ bind-key a display-popup -h 80% -w 90% -E "~/.config/tmux/tmux-agent-switcher"
 bind-key n run-shell "twmux watch next"
 ```
 
+For icons in the status bar, the daemon sets the window option `@twmux_status`
+to the icon of the most urgent agent in each window (`💬` wait, `✅` done, `🤖`
+working; none when idle) and unsets it when the window calms down or the daemon
+stops. Show it by adding it to your window formats:
+
+```tmux
+set -g window-status-format         '#I:#W#{?@twmux_status, #{@twmux_status},}#F'
+set -g window-status-current-format '#I:#W#{?@twmux_status, #{@twmux_status},}#F'
+```
+
 `twmux watch next` considers agents on the tmux server you are on (a client
 cannot switch to another server's panes) and skips the pane you are in. It
 reads `~/.cache/twmux/agents.json`, so it is as fresh as the last poll.
@@ -739,6 +749,7 @@ terminal_title = ["spinner", "app-name", "project"]
 ```toml
 poll_interval = 2.0     # seconds
 hook_stale_secs = 10.0  # see "Agent hooks"
+status_icons = { wait = "💬", done = "✅", working = "🤖" }  # "" = no icon
 
 [codex_cli]
 # Keep this before Claude: both use a braille spinner while working.

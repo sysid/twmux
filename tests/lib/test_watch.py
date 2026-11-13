@@ -714,3 +714,68 @@ def test_pick_next_without_candidates_picks_nothing():
     picked, _ = pick_next([row_on("main", "%1", "working", 1.0)], "main", "", None)
 
     assert picked is None
+
+
+# -- status-bar icons ------------------------------------------------------------
+
+ICONS = {"wait": "W", "done": "D", "working": "R"}
+
+
+def row_in_window(window_id, state, pane_id="%1", socket="main"):
+    return AgentRow(
+        pane_id=pane_id,
+        socket=socket,
+        target="",
+        project="p",
+        agent="a",
+        state=state,
+        state_entered_at=0.0,
+        title="",
+        last_line="",
+        window_id=window_id,
+    )
+
+
+def test_window_icons_show_the_most_urgent_agent_of_each_window():
+    from twmux.lib.watch import window_icons
+
+    rows = [
+        row_in_window("@1", "working", "%1"),
+        row_in_window("@1", "wait", "%2"),
+        row_in_window("@2", "done", "%3"),
+    ]
+
+    assert window_icons(rows, ICONS) == {("main", "@1"): "W", ("main", "@2"): "D"}
+
+
+def test_window_icons_leave_idle_windows_without_icon():
+    from twmux.lib.watch import window_icons
+
+    rows = [row_in_window("@1", "idle"), row_in_window("@2", "unknown", "%2")]
+
+    assert window_icons(rows, ICONS) == {}
+
+
+def test_window_icons_keep_windows_of_different_servers_apart():
+    from twmux.lib.watch import window_icons
+
+    rows = [row_in_window("@1", "wait", socket="a"), row_in_window("@1", "done", socket="b")]
+
+    assert window_icons(rows, ICONS) == {("a", "@1"): "W", ("b", "@1"): "D"}
+
+
+def test_load_config_status_icons_override_defaults(tmp_path):
+    path = tmp_path / "agents.toml"
+    path.write_text('status_icons = { wait = "?" }\n')
+
+    icons = load_config(path).status_icons
+
+    assert icons["wait"] == "?"
+    assert icons["done"]  # default kept
+
+
+def test_load_config_status_icons_table_is_not_an_agent(tmp_path):
+    path = tmp_path / "agents.toml"
+    path.write_text('[status_icons]\nwait = "?"\n')
+
+    assert load_config(path).agents == []

@@ -29,6 +29,10 @@ poll_interval = 2.0   # seconds between polls
 # A "working" mark goes stale after the pane content stayed frozen this long
 # (Ctrl-C fires no hook); wait/done marks after the content changed and settled.
 hook_stale_secs = 10.0
+# Status-bar icon the daemon writes to the window option @twmux_status (the
+# window's most urgent agent; idle windows get none). "" disables a state.
+# Show it with '#{?@twmux_status, #{@twmux_status},}' in window-status-format.
+status_icons = { wait = "💬", done = "✅", working = "🤖" }
 
 [codex_cli]
 # Codex's npm launcher reports pane_current_command = "node", so give Codex a

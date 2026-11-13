@@ -19,7 +19,7 @@ import socket as socket_module
 import sys
 import time
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -48,6 +48,7 @@ class AgentRow:
     state_entered_at: float
     title: str  # pane_title set by the running program (display only)
     last_line: str
+    window_id: str = ""  # tmux @N id, for the status-bar icon
 
 
 # ----------------------------------------------------------------------------
@@ -325,9 +326,25 @@ def pick_next(
     return candidates[index], {"head": head, "index": index}
 
 
+def window_icons(rows: list[AgentRow], icons: dict[str, str]) -> dict[tuple[str, str], str]:
+    """Status-bar icon per (socket, window id): that of the window's most
+    urgent agent. Windows whose agents have no icon (idle) are left out."""
+    best: dict[tuple[str, str], AgentRow] = {}
+    for r in rows:
+        key = (r.socket, r.window_id)
+        if key not in best or state_priority(r.state) > state_priority(best[key].state):
+            best[key] = r
+    return {key: icons[r.state] for key, r in best.items() if icons.get(r.state)}
+
+
 # ----------------------------------------------------------------------------
 # Config loading
 # ----------------------------------------------------------------------------
+
+
+# Icons the daemon writes to the window option @twmux_status; idle and
+# unknown windows get none. An empty string disables the icon for a state.
+DEFAULT_STATUS_ICONS = {"wait": "💬", "done": "✅", "working": "🤖"}
 
 
 @dataclass(frozen=True)
@@ -335,6 +352,7 @@ class Config:
     poll_interval: float
     agents: list[AgentConfig]
     hook_stale_secs: float = 10.0
+    status_icons: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_STATUS_ICONS))
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "twmux" / "agents.toml"
@@ -364,6 +382,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
 
     poll_interval = float(data.pop("poll_interval", 2.0))
     hook_stale_secs = float(data.pop("hook_stale_secs", 10.0))
+    status_icons = {**DEFAULT_STATUS_ICONS, **data.pop("status_icons", {})}
     agents = []
     for name, section in data.items():
         if not isinstance(section, dict):
@@ -379,7 +398,12 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
                 re_idle=section.get("re_idle"),
             )
         )
-    return Config(poll_interval=poll_interval, agents=agents, hook_stale_secs=hook_stale_secs)
+    return Config(
+        poll_interval=poll_interval,
+        agents=agents,
+        hook_stale_secs=hook_stale_secs,
+        status_icons=status_icons,
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -551,17 +575,43 @@ def poll_server(
                 state_entered_at=track.entered_at,
                 title=pane.title,
                 last_line=_last_nonblank_line(captured),
+                window_id=pane.window_id,
             )
         )
     return rows
+
+
+WindowIcons = dict[tuple[str, str], str]  # (socket, window id) -> icon
+
+
+def sync_window_status(server, desired: WindowIcons, written: WindowIcons) -> None:
+    """Make this server's @twmux_status window options match `desired`.
+
+    `written` remembers what the daemon set (across all servers), so only
+    changes cost a tmux call and windows that calmed down get unset.
+    """
+    socket = server.socket_name
+    for key, icon in desired.items():
+        if key[0] == socket and written.get(key) != icon:
+            server.cmd("set-option", "-w", "-t", key[1], "@twmux_status", icon)
+            written[key] = icon
+    for key in [k for k in written if k[0] == socket and k not in desired]:
+        # The window may be gone already; then there is nothing to unset.
+        server.cmd("set-option", "-w", "-u", "-t", key[1], "@twmux_status")
+        del written[key]
 
 
 def _poll_once(
     config: Config,
     state_map: dict[StateKey, Track],
     now: float,
+    written_icons: WindowIcons | None = None,
 ) -> list[AgentRow]:
-    """Poll every live socket; prune state of panes that vanished."""
+    """Poll every live socket; prune state of panes that vanished.
+
+    With written_icons (the daemon), also update the status-bar options;
+    without (`watch status`), only read.
+    """
     from libtmux import Server
 
     rows: list[AgentRow] = []
@@ -569,7 +619,12 @@ def _poll_once(
         if not _socket_alive(sock):
             continue
         try:
-            rows.extend(poll_server(Server(socket_name=sock), config, state_map, now))
+            server = Server(socket_name=sock)
+            server_rows = poll_server(server, config, state_map, now)
+            rows.extend(server_rows)
+            if written_icons is not None:
+                icons = window_icons(server_rows, config.status_icons)
+                sync_window_status(server, icons, written_icons)
         except Exception:
             # A server dying mid-poll must not hide the agents on the others.
             continue
@@ -578,6 +633,17 @@ def _poll_once(
     for stale_key in [k for k in state_map if k not in seen]:
         state_map.pop(stale_key, None)
     return rows
+
+
+def _clear_window_status(written: WindowIcons) -> None:
+    """Best effort on exit: a stopped daemon must not leave icons behind."""
+    from libtmux import Server
+
+    for sock in {k[0] for k in written}:
+        try:
+            sync_window_status(Server(socket_name=sock), {}, written)
+        except Exception:
+            pass
 
 
 # ----------------------------------------------------------------------------
@@ -707,11 +773,12 @@ def run_daemon(
 
     logger.info("daemon started pid=%d interval=%.2fs", os.getpid(), config.poll_interval)
     state_map: dict[StateKey, Track] = {}
+    written_icons: WindowIcons = {}
     try:
         while True:
             now = time.time()
             try:
-                rows = _poll_once(config, state_map, now)
+                rows = _poll_once(config, state_map, now, written_icons)
                 sorted_rows = sort_rows(rows, now)
                 _atomic_write(TSV_PATH, render_tsv(sorted_rows, now))
                 _atomic_write(JSON_PATH, render_json(sorted_rows))
@@ -725,6 +792,7 @@ def run_daemon(
         logger.info("daemon exiting")
         return 0
     finally:
+        _clear_window_status(written_icons)
         _release_singleton()
 
 

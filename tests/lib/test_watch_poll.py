@@ -112,3 +112,31 @@ def test_hook_done_reads_as_idle(session, pane):
     (row,) = poll(session)
 
     assert row.state == "idle"
+
+
+def window_option(window, name):
+    out = window.cmd("show-options", "-w", "-v", "-t", window.window_id, name).stdout
+    return out[0] if out else None
+
+
+def test_sync_window_status_sets_and_clears_the_window_icon(session, pane):
+    from twmux.lib.watch import sync_window_status
+
+    window = session.active_window
+    key = (session.server.socket_name, window.window_id)
+    written: dict = {}
+
+    sync_window_status(session.server, {key: "💬"}, written)
+    assert window_option(window, "@twmux_status") == "💬"
+
+    sync_window_status(session.server, {}, written)
+    assert window_option(window, "@twmux_status") is None
+    assert written == {}
+
+
+def test_poll_rows_carry_their_window_id(session, pane):
+    pane.cmd("select-pane", "-T", "fake-agent: x")
+
+    (row,) = poll(session)
+
+    assert row.window_id == session.active_window.window_id
