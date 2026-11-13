@@ -569,7 +569,11 @@ Hook configs to merge into your agent settings:
 | Codex | `examples/hooks/codex-hooks.json` | `~/.codex/hooks.json` (needs `[features] hooks = true`) |
 
 The Copilot and Codex event names are adapted from
-[workmux](https://github.com/raine/workmux)'s hook files and are untested here.
+[workmux](https://github.com/raine/workmux)'s hook files. Copilot CLI 1.0.110
+is verified for `userPromptSubmitted` → `working` and `agentStop` → `done`
+(also inside an `srt` sandbox, which must allow Unix sockets under
+`/private/tmp` to reach the tmux server); the `notification` matcher is not yet
+verified. Codex is untested.
 Agents without hooks (e.g. aider) keep working through the regexes alone.
 
 ### The `agents.tsv` file
