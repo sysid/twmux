@@ -1196,8 +1196,9 @@ def watch_daemon(
     """Run the agent-state polling daemon.
 
     Polls every pane across all sockets at the interval configured in
-    ~/.config/twmux/agents.toml, classifies state per agent, and writes a
-    sorted TSV to ~/.cache/twmux/agents.tsv.
+    ~/.config/twmux/agents.toml, classifies state per agent (hook marks
+    first, regexes as cross-check), and writes ~/.cache/twmux/agents.tsv,
+    agents.json and the @twmux_status window option.
     """
     from twmux.lib.watch import load_config, run_daemon
 

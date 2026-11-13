@@ -1,4 +1,9 @@
-"""Watch daemon: poll panes across sockets, classify state, write sorted TSV.
+"""Watch daemon: poll panes across sockets, classify agent state, publish it.
+
+State comes from agent hooks (`twmux mark`, see twmux.lib.mark) where present,
+cross-checked against regexes on the captured screen. Published as the sorted
+agents.tsv (fzf switcher), agents.json (tools, `watch next`) and the
+@twmux_status window option (status bar).
 
 Split into two layers:
 - Pure logic (sort, merge, format) — unit-tested in tests/lib/test_watch.py.
