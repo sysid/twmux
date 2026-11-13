@@ -104,3 +104,45 @@ def test_send_safe_into_still_starting_shell_is_not_reported_as_failed(session):
 
     assert result.success is True
     assert any(line == "late_42" for line in pane.capture_pane())
+
+
+def test_send_safe_sends_key_names_as_literal_text(pane):
+    """Regression: text that happens to be a tmux key name ("C-c") was sent
+    as that key, interrupting the foreground program instead of typing it."""
+    from twmux.lib.safe_input import send_safe
+
+    send_safe(pane, "cat")
+    time.sleep(0.3)
+
+    send_safe(pane, "C-c", enter=False)
+    time.sleep(0.3)
+
+    # Still running cat (named gcat on GNU-coreutils PATHs), not back at bash.
+    assert pane.cmd("display-message", "-p", "#{pane_current_command}").stdout != ["bash"]
+    pane.send_keys("C-c", enter=False)
+
+
+def test_send_safe_multiline_without_enter_executes_nothing(pane):
+    """Regression: an embedded newline acted as Enter, so the first line ran
+    although the caller asked for no Enter at all."""
+    from twmux.lib.safe_input import send_safe
+
+    send_safe(pane, "echo first_$((1+1))\necho second_$((2+2))", enter=False)
+    time.sleep(0.3)
+
+    content = pane.capture_pane()
+    assert "first_2" not in content
+    assert "second_4" not in content
+
+
+def test_send_safe_multiline_with_enter_submits_the_whole_block(pane):
+    """Multi-line text arrives as one bracketed paste and runs on Enter."""
+    from twmux.lib.safe_input import send_safe
+
+    result = send_safe(pane, "echo first_$((1+1))\necho second_$((2+2))")
+    time.sleep(0.3)
+
+    content = pane.capture_pane()
+    assert result.success is True
+    assert "first_2" in content
+    assert "second_4" in content

@@ -1,6 +1,7 @@
 """Race-condition-safe tmux input operations."""
 
 import hashlib
+import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -71,6 +72,26 @@ def wait_for_idle(
         time.sleep(poll_interval)
 
 
+def _type_text(pane: "Pane", text: str) -> None:
+    """Type text into the pane exactly as given, never pressing Enter.
+
+    Single-line text goes through `send-keys -l`: without -l, text that
+    happens to be a key name ("C-c", "Enter") is sent as that key.
+    Multi-line text goes through a paste buffer with -p (bracketed paste):
+    typed newlines act as Enter, so every line but the last would run
+    immediately and an agent TUI would submit a prompt line by line.
+    """
+    if "\n" not in text:
+        pane.send_keys(text, enter=False, literal=True)
+        return
+
+    # Named per pane and process so concurrent senders never paste each
+    # other's buffers; -d deletes it after the paste.
+    buffer = f"twmux-{os.getpid()}-{pane.pane_id}"
+    pane.cmd("set-buffer", "-b", buffer, "--", text)
+    pane.cmd("paste-buffer", "-p", "-d", "-b", buffer, "-t", pane.pane_id)
+
+
 def send_safe(
     pane: "Pane",
     text: str,
@@ -96,7 +117,7 @@ def send_safe(
         SendResult indicating success and attempt count
     """
     # Send the text without Enter first
-    pane.send_keys(text, enter=False)
+    _type_text(pane, text)
 
     if not enter:
         return SendResult(success=True, attempts=1)

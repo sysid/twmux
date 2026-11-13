@@ -248,6 +248,8 @@ def send(
 
     Sends text, waits, then sends Enter and verifies the pane content changed.
     Retries Enter if verification fails (solves the "lost Enter" problem).
+    Text is sent literally (key names like "C-c" are typed, not pressed);
+    multi-line text is pasted as one bracketed paste, so newlines never submit.
 
     JSON: {"ok": true, "success": bool, "attempts": int}
     Error: {"ok": false, "error": str}
@@ -416,6 +418,58 @@ def interrupt(
     pane.send_keys("C-c", enter=False)
 
     output_result({"interrupted": True})
+
+
+@app.command(
+    rich_help_panel="Pane Control",
+    epilog="""
+[bold]Examples[/bold] (run by an agent's lifecycle hooks, see README)
+
+twmux mark working --agent claude_code
+
+twmux mark clear
+""",
+)
+def mark(
+    state: Annotated[str, typer.Argument(help="working | wait | done | clear")],
+    agent: Annotated[str, typer.Option("--agent", help="Agent name shown by `twmux watch`")] = "",
+) -> None:
+    """Record this pane's agent state for `twmux watch` (for agent hooks).
+
+    Targets the pane the calling process runs in ($TMUX, $TMUX_PANE), on
+    whatever server that is — the -L socket policy does not apply, as the
+    only effect is a user option on the caller's own pane.
+
+    Silent in human mode: Claude Code feeds some hooks' stdout to the model.
+    No-op (exit 0) outside tmux, with TWMUX_NO_MARK set, or in a Claude
+    background job (CLAUDE_JOB_DIR).
+
+    JSON: {"ok": true, "marked": bool, "pane_id": str, "state": str}
+    Exit: 0 success or no-op, 1 on invalid state or tmux failure.
+    """
+    from libtmux import Server
+
+    from twmux.lib.mark import HOOK_STATES, caller_pane_from_env, mark_pane, opted_out
+
+    if state not in (*HOOK_STATES, "clear"):
+        error_result(f"Invalid state '{state}': use {', '.join(HOOK_STATES)} or clear")
+        raise typer.Exit(1)
+
+    hook_pane = caller_pane_from_env()
+    if hook_pane is None or opted_out():
+        if json_output:
+            output_result({"marked": False})
+        return
+
+    socket_path, pane_id = hook_pane
+    try:
+        mark_pane(Server(socket_path=socket_path), pane_id, state, agent)
+    except Exception as e:
+        error_result(f"Cannot mark pane {pane_id}: {e}")
+        raise typer.Exit(1)
+
+    if json_output:
+        output_result({"marked": True, "pane_id": pane_id, "state": state})
 
 
 @app.command(
@@ -1142,8 +1196,9 @@ def watch_daemon(
     """Run the agent-state polling daemon.
 
     Polls every pane across all sockets at the interval configured in
-    ~/.config/twmux/agents.toml, classifies state per agent, and writes a
-    sorted TSV to ~/.cache/twmux/agents.tsv.
+    ~/.config/twmux/agents.toml, classifies state per agent (hook marks
+    first, regexes as cross-check), and writes ~/.cache/twmux/agents.tsv,
+    agents.json and the @twmux_status window option.
     """
     from twmux.lib.watch import load_config, run_daemon
 
@@ -1169,6 +1224,50 @@ def watch_stop() -> None:
     else:
         rprint(f"[yellow]timeout waiting for pid={result.pid} to exit[/yellow]")
         raise typer.Exit(1)
+
+
+@watch_app.command("next")
+def watch_next() -> None:
+    """Jump to the newest waiting or done agent; repeat to cycle older ones.
+
+    Meant for a tmux key binding:  bind n run-shell "twmux watch next"
+    Considers agents on the caller's tmux server only, skips the pane you
+    are in, and restarts at the newest whenever another agent finishes.
+    Silent on success (tmux shows run-shell output in a view pane); says
+    "no agent waiting" via tmux display-message instead.
+
+    JSON: {"ok": true, "jumped": bool, "pane_id"?: str, "state"?: str}
+    Exit: 0 jumped or nothing to do, 1 outside tmux, daemon not running,
+    or tmux failure.
+    """
+    import os
+
+    from libtmux import Server
+
+    from twmux.lib.watch import jump_next
+
+    socket_path = os.environ.get("TMUX", "").split(",")[0]
+    if not socket_path:
+        error_result("not inside tmux ($TMUX unset)")
+        raise typer.Exit(1)
+
+    try:
+        row = jump_next(socket_path)
+    except FileNotFoundError:
+        error_result("no agents.json — is 'twmux watch daemon' running?")
+        raise typer.Exit(1)
+    except Exception as e:
+        error_result(f"Cannot jump: {e}")
+        raise typer.Exit(1)
+
+    if row is None:
+        if json_output:
+            output_result({"jumped": False})
+        else:
+            Server(socket_path=socket_path).cmd("display-message", "no agent waiting or done")
+        return
+    if json_output:
+        output_result({"jumped": True, "pane_id": row.pane_id, "state": row.state})
 
 
 @watch_app.command("status")

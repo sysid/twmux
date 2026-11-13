@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume|clear", "hooks": [{ "type": "command", "command": "twmux mark clear" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "twmux mark working --agent codex_cli" }] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [{ "type": "command", "command": "twmux mark wait --agent codex_cli" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "twmux mark working --agent codex_cli" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "twmux mark done --agent codex_cli" }] }
+    ]
+  }
+}
