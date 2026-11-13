@@ -19,7 +19,7 @@ twmux solves this with race-condition-safe I/O, a consistent JSON contract, and 
 - **Structured JSON contract** - Consistent `{"ok": true/false, ...}` envelope for all commands, errors included
 - **Agent isolation** - Default socket `claude` keeps agent operations separate from user tmux
 - **Safety boundaries** - Non-agent sockets require `--force` flag
-- **Race-condition-safe send** - Verifies commands are received before sending Enter
+- **Race-condition-safe send** - Verifies commands are received before sending Enter; text is typed literally, multi-line text arrives as one bracketed paste
 - **Execute and capture** - Run commands and get output with exit codes
 - **Marker-based execution** - Reliable output capture using unique markers
 - **Wait-idle detection** - Wait until pane output stabilizes
@@ -28,6 +28,7 @@ twmux solves this with race-condition-safe I/O, a consistent JSON contract, and 
 - **Pane management** - Launch, kill, interrupt, move, and escape
 - **Cross-session moves** - Move panes and windows between sessions
 - **Zero tracebacks** - All errors are caught and formatted, even connection failures
+- **Agent monitor** - [`twmux watch`](#twmux-watch--multi-agent-dashboard--switcher): which of your agents waits, finished unseen, or works — in a popup, a jump key, and the tmux status bar; agents can report their own state via hooks (`twmux mark`)
 
 Nothing you couldn't do with bare tmux, but much more reliable for agent use.
 
@@ -500,163 +501,263 @@ you're already in Python, libtmux is the API for those operations.
 
 When you run several coding agents in parallel — across multiple tmux sessions,
 windows, and panes — it's easy to lose track of which ones are blocked on a
-permission prompt, which are still working, and which finished hours ago
-without you noticing. `twmux watch` solves this with one small daemon and one
-tmux switcher.
+question, which are still working, and which finished while you were looking
+elsewhere. `twmux watch` is one small daemon that tracks every agent pane and
+tells you, in four places, which ones need you.
 
-### How it works
+### At a glance
 
-1. `twmux watch daemon` runs as a background process started by tmux.
-2. Every `poll_interval` seconds it lists every pane on every tmux socket with
-   one `list-panes -a` per socket, matches panes to agents by command or
-   title, captures the visible content of the matched panes only, and
-   classifies the state per the regex rules in `~/.config/twmux/agents.toml`:
-   - **wait** — agent is blocked on user input
-   - **done** — agent finished while its window was out of sight; turns
-     `idle` once a poll finds its window in front of you (active window of an
-     attached session — a visit shorter than `poll_interval` is not counted)
-   - **working** — agent is actively processing
-   - **idle** — agent is at its prompt, nothing happening
-3. State, waiting-time, and per-pane metadata are written — sorted by
-   urgency — to `~/.cache/twmux/agents.tsv` (format below).
-4. An fzf-based tmux switcher (see "Setup") reads that TSV — the list is the
-   dashboard, the preview pane shows live agent output, and Enter jumps you to
-   the corresponding pane.
+```
+ agent hooks ──► twmux mark ──► tmux pane options ─┐
+ (Claude Code, Copilot, …)      @twmux_state       │
+                                                   ▼
+ every pane on every socket ──────────────► twmux watch daemon  (poll every 2s)
+ (title, command, screen content)            classify + track per pane
+                                                   │
+        ┌──────────────────────┬──────────────────┼─────────────────────┐
+        ▼                      ▼                  ▼                     ▼
+ agents.tsv              agents.json        @twmux_status          @twmux_summary
+ prefix a: fzf popup     prefix A:          window option:         global option:
+ (all agents, sorted)    twmux watch next   icon in window list    "💬1 ✅2" in
+                         (jump, no popup)   (current session)      status-right
+                                                                   (all sessions)
+```
 
-### Agent hooks — let agents report their own state (recommended)
+| You want to… | Use | Shows |
+| --- | --- | --- |
+| See every agent and its state | `prefix a` (switcher popup) | All agents on all sockets, most urgent first, live preview |
+| Go straight to whoever needs you | `prefix A` (`twmux watch next`) | Jumps to the newest `wait`/`done` agent; press again for the next older one |
+| Know which window needs you | Status bar window list | `💬` / `✅` / `🤖` after the window name — **current session only** |
+| Know that *anything* needs you | Status bar right side | `💬1 ✅2` — counts across **all sessions** of this tmux server |
 
-Regexes guess at a TUI that changes with every agent release, and a busy agent
-can read as `idle` for a poll between two status-line redraws. Agents with
-lifecycle hooks can instead report their state directly:
+### Agent states
+
+| State | Meaning | Ends when |
+| --- | --- | --- |
+| `wait` 💬 | Agent is blocked on you: permission prompt or a question | You answer |
+| `done` ✅ | Agent finished **while its window was not in front of you** | A poll finds its window in front of you → `idle` |
+| `working` 🤖 | Agent is processing | It finishes, asks, or is interrupted |
+| `idle` | Agent is at its prompt and you have seen it | You give it a new task |
+| `unknown` | Matched as an agent, but nothing tells its state | — |
+
+```
+             prompt submitted                  question / permission prompt
+   idle ─────────────────────► working ─────────────────────────────► wait
+    ▲                            │  ▲                                  │
+    │ window seen                │  └──────────── answered ────────────┘
+    │                            │ finished
+   done ◄── window not seen ─────┤
+                                 └── window seen ──► idle
+```
+
+"In front of you" means: the pane's window is the active window of a session
+that has a client attached. The daemon checks this at each poll, so a visit
+shorter than `poll_interval` (2s) does not count as seen. Agents found when the
+daemon starts count as seen — a daemon restart never floods the list with
+`done`, and it resets all time-in-state counters.
+
+### Quick start
+
+```bash
+# 1. Install twmux and seed ~/.config/twmux/agents.toml (opens $EDITOR)
+uv tool install --upgrade twmux
+twmux config
+
+# 2. Install the switcher popup script
+cp examples/tmux-agent-switcher ~/.config/tmux/
+chmod +x ~/.config/tmux/tmux-agent-switcher
+```
+
+3. Add to `~/.config/tmux/tmux.conf`, then reload (`tmux source-file …`):
+
+```tmux
+# Start the daemon with tmux (or use launchd, see "Daemon lifecycle")
+run-shell -b 'twmux watch daemon --ensure-running'
+
+# Switcher popup: all agents, Enter jumps
+bind-key a display-popup -h 80% -w 90% -E "~/.config/tmux/tmux-agent-switcher"
+# Jump to the newest waiting/done agent, no popup; press again to cycle.
+# (Not `n`: that is tmux's next-window.)
+bind-key A run-shell "twmux watch next"
+
+# Window icon: append to your existing window formats
+setw -g window-status-format         '#I:#W#{?@twmux_status, #{@twmux_status},} '
+setw -g window-status-current-format '#I:#W#{?@twmux_status, #{@twmux_status},} '
+
+# Summary across all sessions: prepend to your existing status-right.
+# Commas inside #{?…} branches must be escaped as "#,".
+set -g status-right '#{?@twmux_summary,#[fg=#ffb86c#,bold]#{@twmux_summary}#[default] | ,}%a %d %b %R'
+```
+
+4. **Recommended:** install agent hooks (see "Agent hooks" below) so agents
+   report their state instead of the daemon guessing it from the screen.
+5. **Restart running agent sessions** — agents read their hook config only at
+   session start (`claude --continue`, `copilot --resume` keep the
+   conversation).
+
+Without step 4 everything still works, from screen-scraping alone.
+
+### How the state is determined
+
+Each poll, per agent pane, the daemon combines up to two sources:
+
+| Source | How | Strength | Weakness |
+| --- | --- | --- | --- |
+| **Regexes** (`agents.toml`) | `re_wait` / `re_working` / `re_idle` on the captured screen | Works for any agent, zero setup | Breaks when the agent's TUI changes; can flap between redraws |
+| **Agent hooks** (`twmux mark`) | The agent calls `twmux mark <state>` on its lifecycle events | Exact: the agent says what it does | Needs hook config; hooks miss some events (Ctrl-C) |
+
+#### Which panes are agents
+
+A pane is an agent if **either**:
+
+- an `agents.toml` section matches it — `cmd_match` on the pane's current
+  command **or** `title_match` on its title (first section wins; an optional
+  `content_match` must then also match the screen), **or**
+- it carries a valid hook mark (`@twmux_state`) — even if no regex recognises
+  it. The `--agent` name from the mark is shown.
+
+#### Agent hooks — `twmux mark`
 
 ```bash
 twmux mark working|wait|done|clear [--agent NAME]
 ```
 
-`mark` writes tmux **pane options** (`@twmux_state`, `@twmux_state_ts`,
-`@twmux_cmd`, `@twmux_agent`) on the pane the hook runs in — it finds the pane
-from the `$TMUX`/`$TMUX_PANE` the hook inherits from the agent. The state lives
-and dies with the pane: no files, nothing to clean up. The daemon reads it in
-the same `list-panes` call as everything else.
+Run by an agent's hooks, inside the agent's pane. It finds that pane from the
+`$TMUX` / `$TMUX_PANE` the hook inherits, and writes **tmux pane options**:
 
-Rules the daemon applies:
+| Option | Content |
+| --- | --- |
+| `@twmux_state` | `working` \| `wait` \| `done` |
+| `@twmux_state_ts` | Epoch seconds of the mark — a new mark resets staleness tracking |
+| `@twmux_cmd` | The pane's current command at mark time (e.g. `2.1.323` for Claude Code) |
+| `@twmux_agent` | The `--agent` name |
 
-- A hook state beats the regex state, **except** a `wait` prompt on screen,
-  which always wins (some permission prompts emit no hook).
-- `done` reads as the agent being back at its prompt (`idle`).
-- Hooks miss events (Ctrl-C fires no `Stop`; a rejected permission prompt fires
-  nothing), so the screen cross-checks them. `working` goes stale once the pane
-  content has been frozen for `hook_stale_secs` (default 10) — a working agent
-  redraws its spinner every second. `wait`/`done` screens are static by nature;
-  they go stale only if the content changed *after* the mark and then settled
-  for `hook_stale_secs`. A stale mark falls back to the regex state; the next
-  mark is trusted again.
-- A mark recorded while the pane ran another command than it runs now (the
-  agent exited back to the shell) is ignored.
-- A marked pane is listed even when no `agents.toml` regex recognises it;
-  `--agent` names it.
+`clear` removes all four. Pane options live and die with the pane, so there are
+no state files and nothing to clean up. Inspect a pane's marks with
+`tmux show-options -p -t <pane> | grep twmux`.
 
-`mark` prints nothing (Claude Code feeds some hooks' stdout to the model) and
-is a no-op outside tmux, with `TWMUX_NO_MARK=1` (set it on nested agents), or
-inside a Claude background job (`CLAUDE_JOB_DIR`).
+`mark` is built to be safe inside hooks:
 
-Hook configs to merge into your agent settings:
+- **Silent** in human mode — Claude Code feeds some hooks' stdout to the model.
+- **No-op, exit 0** outside tmux, with `TWMUX_NO_MARK=1` (set it on nested
+  agents launched from an agent pane, so only the outer agent drives the
+  pane), and inside Claude background jobs (`CLAUDE_JOB_DIR` set).
+- Takes ~0.1s.
 
-| Agent | File | Merge into |
+Ready-made hook configs:
+
+| Agent | File | Install as | Status |
+| --- | --- | --- | --- |
+| Claude Code | `examples/hooks/claude-code-settings.json` | merge `hooks` into `~/.claude/settings.json` | in daily use |
+| Copilot CLI | `examples/hooks/copilot-hooks.json` | copy to `~/.copilot/hooks/twmux.json` | 1.0.110: `working`/`done` verified; `notification` → `wait` matcher not yet verified |
+| Codex | `examples/hooks/codex-hooks.json` | merge into `~/.codex/hooks.json` (needs `[features] hooks = true`) | untested |
+
+Event mapping (Claude Code names; the others are equivalent):
+
+| Event | Mark |
+| --- | --- |
+| `SessionStart`, `SessionEnd` | `clear` |
+| `UserPromptSubmit`, `PostToolUse` (no matcher — every tool) | `working` |
+| `Notification` matcher `permission_prompt\|elicitation_dialog` | `wait` |
+| `Stop` | `done` |
+
+`PostToolUse` must run for **every** tool, not just `Bash`: it is what flips
+`wait` back to `working` after you approve a prompt for, say, an Edit.
+
+> **Never keep these hooks with a twmux that lacks `mark`.** An unknown
+> subcommand exits with code 2, which Claude Code treats as *blocking*:
+> `UserPromptSubmit` would reject every prompt and `Stop` would keep the agent
+> from finishing.
+
+Agents in a sandbox: `mark` must reach the tmux socket. With `srt`, allow Unix
+sockets under the tmux socket directory (e.g. `/private/tmp` on macOS) in
+`~/.srt-settings.json` → `network.allowUnixSockets`.
+
+#### Combining hook and screen
+
+The hook is trusted first, the screen cross-checks it:
+
+| Situation | Result | Why |
 | --- | --- | --- |
-| Claude Code | `examples/hooks/claude-code-settings.json` | `~/.claude/settings.json` |
-| Copilot CLI | `examples/hooks/copilot-hooks.json` | `~/.copilot/hooks/twmux.json` |
-| Codex | `examples/hooks/codex-hooks.json` | `~/.codex/hooks.json` (needs `[features] hooks = true`) |
+| Screen shows a wait prompt (`re_wait`) | `wait`, whatever the hook says | Some prompts fire no hook |
+| No valid mark | Regex state | Agent without hooks |
+| Mark made under another command than the pane runs now | Mark ignored | The agent exited (e.g. `2.1.323` → `bash`) |
+| Mark `working`, screen frozen for `hook_stale_secs` (10s) | Mark stale → regex state | Ctrl-C/Escape fire no hook; a working agent redraws every second |
+| Mark `wait`/`done`, screen changed *after* the mark, then frozen 10s | Mark stale → regex state | Something happened that no hook reported (e.g. prompt rejected) |
+| Mark `wait`/`done`, screen unchanged | Mark holds | These screens are static by nature |
+| Mark `done` | Treated as `idle` → shown as `done` until seen | See "Agent states" |
 
-The Copilot and Codex event names are adapted from
-[workmux](https://github.com/raine/workmux)'s hook files. Copilot CLI 1.0.110
-is verified for `userPromptSubmitted` → `working` and `agentStop` → `done`
-(also inside an `srt` sandbox, which must allow Unix sockets under
-`/private/tmp` to reach the tmux server); the `notification` matcher is not yet
-verified. Codex is untested.
-Agents without hooks (e.g. aider) keep working through the regexes alone.
+A new mark (new `@twmux_state_ts`) is trusted again.
 
-### The `agents.tsv` file
+### What you see
 
-The daemon's only output is a single file, atomically rewritten every
-`poll_interval` seconds:
+#### Switcher popup — `prefix a`
 
-```
-~/.cache/twmux/agents.tsv
-```
+An fzf list of all agents on all sockets, sorted by urgency (`wait` → `done` →
+`idle` → `working` → `unknown`; within a state, most recent change first). The
+preview shows the live pane; Enter jumps there. Columns: time in state, state,
+agent, target, project, pane title (Claude Code puts its current task there),
+last screen line.
 
-It is the contract between the daemon (producer) and the switcher (consumer) —
-anything that can read a TSV can build its own dashboard on top of it. One
-tab-separated row per matched agent pane, **no header line** (the switcher
-supplies the column names itself):
+#### Jump key — `prefix A` (`twmux watch next`)
+
+- Jumps to the **newest** `wait`/`done` agent; each further press goes to the
+  next older one, wrapping around.
+- Starts over at the newest as soon as another agent finishes.
+- Skips the pane you are in. Considers only the tmux server you are on (a client
+  cannot switch to another server's panes).
+- Says "no agent waiting or done" in the status line when there is nothing.
+- Reads `agents.json`, so it is as fresh as the last poll (≤2s).
+
+#### Status bar — window icon and summary
+
+| Option | Scope | Value | Visible |
+| --- | --- | --- | --- |
+| `@twmux_status` (window) | per window | icon of the window's most urgent agent; unset when all idle | In the window list — **only the current session's windows** |
+| `@twmux_summary` (global) | per tmux server | count of `wait`/`done` agents in all sessions, e.g. `💬1 ✅2`; unset when none | In `status-right` — from every session |
+
+Both are written only on change and removed when the daemon stops. Icons are
+configurable with `status_icons` in `agents.toml` (`""` disables one).
+`working` gets a window icon but is not counted in the summary — it does not
+need you.
+
+### Outputs reference
+
+| Output | Consumer | Content |
+| --- | --- | --- |
+| `~/.cache/twmux/agents.tsv` | switcher popup | One row per agent, sorted, no header (columns below) |
+| `~/.cache/twmux/agents.json` | `watch next`, scripts | Same rows as JSON objects with `socket`, `pane_id`, `target`, `project`, `agent`, `state`, `state_entered_at` (epoch), `title` |
+| `~/.cache/twmux/next.json` | `watch next` | Its cycle position |
+| `@twmux_status`, `@twmux_summary` | tmux status bar | See above |
+| `~/.cache/twmux/watch.log` | you | Daemon log, rotated (~4 MB max) |
+
+All files are rewritten atomically every `poll_interval`. TSV columns:
 
 | # | Column | Meaning |
 | --- | --- | --- |
-| 1 | `wait` | Human-readable time in the current state (`12s`, `5m04s`, `1h2m`); `-` while `working` |
+| 1 | `wait` | Time in the current state (`12s`, `5m04s`, `1h2m`); `-` while `working` |
 | 2 | `state` | `wait` \| `done` \| `working` \| `idle` \| `unknown` |
-| 3 | `agent` | Name of the `agents.toml` section that matched this pane |
-| 4 | `target` | `session:window.pane` address — the switcher's preview and jump both key off this |
+| 3 | `agent` | `agents.toml` section, or the hook's `--agent` name |
+| 4 | `target` | `session:window.pane` — the switcher's preview and jump key off this |
 | 5 | `project` | Basename of the pane's working directory |
-| 6 | `title` | The pane's `pane_title`. For Claude Code this is its current task, set automatically via OSC escapes; set your own on any pane with `tmux select-pane -T "label"` |
-| 7 | `last_line` | Last non-blank line of the captured pane content |
+| 6 | `title` | The pane's `pane_title` (set your own with `tmux select-pane -T "label"`) |
+| 7 | `last_line` | Last non-blank line of the screen |
 
-Rows are **sorted by urgency**: first by state (`wait` → `done` → `idle` →
-`working` → `unknown`), then within each bucket the shortest time-in-state first — so panes
-that just changed sit at the top and the long-idle tail sinks to the bottom.
-Inspect it any time with `cat ~/.cache/twmux/agents.tsv`. An empty or absent
-file means no panes matched (or the daemon isn't running).
+Use `agents.json` when you need to address a pane: the TSV target is ambiguous
+across tmux sockets, `socket` + `pane_id` is not.
 
-For tools, the daemon writes the same rows, in the same order, as a JSON array
-to `~/.cache/twmux/agents.json`. Each entry has `socket`, `pane_id`, `target`,
-`project`, `agent`, `state`, `state_entered_at` (epoch seconds) and `title` —
-the socket and pane id address a pane unambiguously, the TSV target does not.
+### Troubleshooting
 
-### Setup
-
-```bash
-# Install / upgrade twmux
-uv tool install --upgrade twmux
-
-# Seed ~/.config/twmux/agents.toml from the packaged example on first run,
-# open it in $EDITOR, and tune the regexes to your agents
-twmux config
-
-# Switcher script (matches the existing ~/.config/tmux/tmux-* pattern)
-cp examples/tmux-agent-switcher ~/.config/tmux/
-chmod +x ~/.config/tmux/tmux-agent-switcher
-
-# In ~/.config/tmux/tmux.conf
-bind-key a display-popup -h 80% -w 90% -E "~/.config/tmux/tmux-agent-switcher"
-# One key, no popup: jump to the newest waiting/done agent; press again to
-# cycle to older ones (restarts at the newest when another agent finishes)
-bind-key n run-shell "twmux watch next"
-```
-
-For icons in the status bar, the daemon sets the window option `@twmux_status`
-to the icon of the most urgent agent in each window (`💬` wait, `✅` done, `🤖`
-working; none when idle) and unsets it when the window calms down or the daemon
-stops. Show it by adding it to your window formats:
-
-```tmux
-set -g window-status-format         '#I:#W#{?@twmux_status, #{@twmux_status},}#F'
-set -g window-status-current-format '#I:#W#{?@twmux_status, #{@twmux_status},}#F'
-```
-
-The window list only shows the windows of the current session, so an agent
-waiting in another session stays invisible there. For that, the daemon also
-sets the global option `@twmux_summary` per tmux server, counting its waiting
-and done agents (e.g. `💬1 ✅2`; unset when there are none). Put it in
-`status-right` to see from any session that someone needs you:
-
-```tmux
-set -g status-right '#{?@twmux_summary,#{@twmux_summary} | ,}...your existing status-right...'
-```
-
-`twmux watch next` considers agents on the tmux server you are on (a client
-cannot switch to another server's panes) and skips the pane you are in. It
-reads `~/.cache/twmux/agents.json`, so it is as fresh as the last poll.
-
-Pick a daemon-startup method — see "Daemon lifecycle" below.
+| Symptom | Cause | Check / fix |
+| --- | --- | --- |
+| No window icons in the status bar | The agents needing you are in **another session**, or all agents are `idle` (no icon) | Look at the `status-right` summary; `tmux list-windows -a -F '#S:#I #{@twmux_status}'` |
+| No summary / icons at all | Daemon is old or not running | `twmux watch status` works? `ls -l ~/.cache/twmux/agents.json` recent? Restart the daemon |
+| Agent still flaps `working` ↔ `idle` | Its session started before the hooks were installed | `tmux show-options -p -t <pane> \| grep twmux` empty → restart the agent session |
+| `prefix A` says "no agent waiting or done" | Nothing in `wait`/`done` on **this** server, or you are already in that pane | `prefix a` shows the full list |
+| All rows show the same time in state | The daemon restarted (timers are in memory) | Normal |
+| An agent shows `wait` while working | Copilot `notification` matcher not filtering (unverified) | Report it; remove the `notification` hook |
+| Pane stays `working` after Ctrl-C | Expected for up to `hook_stale_secs` (10s) | Wait one stale window |
+| Hooks blocking prompts / agent never stops | twmux without `mark` installed (exit code 2) | Install the current twmux, or remove the hooks |
 
 ### Daemon lifecycle — two ways to start
 
@@ -762,7 +863,7 @@ terminal_title = ["spinner", "app-name", "project"]
 
 ```toml
 poll_interval = 2.0     # seconds
-hook_stale_secs = 10.0  # see "Agent hooks"
+hook_stale_secs = 10.0  # see "Combining hook and screen"
 status_icons = { wait = "💬", done = "✅", working = "🤖" }  # "" = no icon
 
 [codex_cli]
@@ -804,9 +905,11 @@ Add a new agent by appending a section; no code changes needed.
 twmux watch daemon                   # foreground poll loop (Ctrl-C to stop)
 twmux watch daemon --ensure-running  # exit silently if a daemon is running
 twmux watch stop                     # SIGTERM the running daemon, wait for exit
-twmux watch status                   # one-shot TSV dump for debugging
-twmux watch next                     # jump to newest wait/done agent (cycles)
-twmux mark working --agent NAME      # agent hooks: report state (see above)
+twmux watch status                   # one-shot poll, print TSV (read-only: no files, no tmux options)
+twmux watch next                     # jump to newest wait/done agent; repeat to cycle (bind to prefix A)
+twmux --json watch next              # same, reports {"jumped": bool, "pane_id", "state"}
+twmux mark STATE [--agent NAME]      # for agent hooks: working | wait | done | clear
+twmux config                         # edit agents.toml (poll_interval, hook_stale_secs, status_icons, agents)
 ```
 
 See **Operating the daemon** above for the full start/stop/restart matrix
