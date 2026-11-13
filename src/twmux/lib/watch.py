@@ -27,10 +27,11 @@ from twmux.lib.classify import AgentConfig, classify
 from twmux.lib.mark import HOOK_STATES, OPT_AGENT, OPT_CMD, OPT_STATE, OPT_STATE_TS
 from twmux.lib.safety import enumerate_all_sockets, get_socket_dir
 
-State = str  # "wait" | "working" | "idle" | "unknown"
+State = str  # "wait" | "done" | "working" | "idle" | "unknown"
 
 # Lower-numbered states are less actionable; sort DESC so high-priority first.
-_STATE_PRIORITY = {"wait": 3, "idle": 2, "working": 1, "unknown": 0}
+# done = idle, but finished while out of sight: the user has not seen it yet.
+_STATE_PRIORITY = {"wait": 4, "done": 3, "idle": 2, "working": 1, "unknown": 0}
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,7 @@ class Track:
     stable_since: float  # when the captured content last changed
     hook_ts: str  # the mark these flags refer to
     changed_since_mark: bool  # content changed after the first poll of that mark
+    seen_at: float  # last poll that found the pane's window in front of the user
 
 
 def hook_is_stale(
@@ -172,6 +174,11 @@ def next_track(
 
     prev_state = (prev.state, prev.entered_at) if prev is not None else None
     state, entered_at = merge_state(prev_state, observed, now)
+    # A pane first met counts as seen: without history there is no evidence
+    # the user missed anything. ponytail: "seen" means visible at a poll, so a
+    # visit shorter than poll_interval is missed — upgrade path is a tmux
+    # pane-focus-in hook setting a flag the daemon consumes.
+    seen_at = now if prev is None or pane.visible else prev.seen_at
     return Track(
         state=state,
         entered_at=entered_at,
@@ -179,7 +186,16 @@ def next_track(
         stable_since=stable_since,
         hook_ts=pane.hook_ts,
         changed_since_mark=changed_since_mark,
+        seen_at=seen_at,
     )
+
+
+def display_state(track: Track) -> State:
+    """The tracked state, with idle split into done (not seen since the agent
+    went idle) and idle (seen)."""
+    if track.state == "idle" and track.seen_at < track.entered_at:
+        return "done"
+    return track.state
 
 
 # Unit separator: cannot appear in session names or paths and is vanishingly
@@ -472,7 +488,7 @@ def poll_server(
                 target=pane.target,
                 project=_basename_cwd(pane.path),
                 agent=cfg.name if cfg else (pane.hook_agent or "agent"),
-                state=track.state,
+                state=display_state(track),
                 state_entered_at=track.entered_at,
                 title=pane.title,
                 last_line=_last_nonblank_line(captured),

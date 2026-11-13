@@ -522,3 +522,85 @@ def test_load_config_defaults_hook_stale_secs_to_ten(tmp_path):
     path.write_text("poll_interval = 2.0\n")
 
     assert load_config(path).hook_stale_secs == 10.0
+
+
+# -- done: finished but not yet seen -------------------------------------------
+
+
+def pane_at(visible, hook_state=None):
+    from twmux.lib.watch import PaneInfo
+
+    return PaneInfo(
+        pane_id="%1",
+        command="2.1.139",
+        title="",
+        path="/p",
+        target="s:1.1",
+        window_id="@1",
+        visible=visible,
+        hook_state=hook_state,
+    )
+
+
+def test_agent_finishing_out_of_sight_is_done():
+    from twmux.lib.watch import display_state, next_track
+
+    t = next_track(None, pane_at(visible=False), "working", "a", now=0.0, stale_secs=10)
+    t = next_track(t, pane_at(visible=False), "idle", "b", now=2.0, stale_secs=10)
+
+    assert display_state(t) == "done"
+
+
+def test_agent_finishing_in_front_of_the_user_is_just_idle():
+    from twmux.lib.watch import display_state, next_track
+
+    t = next_track(None, pane_at(visible=True), "working", "a", now=0.0, stale_secs=10)
+    t = next_track(t, pane_at(visible=True), "idle", "b", now=2.0, stale_secs=10)
+
+    assert display_state(t) == "idle"
+
+
+def test_done_becomes_idle_once_its_window_was_visible():
+    from twmux.lib.watch import display_state, next_track
+
+    t = next_track(None, pane_at(visible=False), "working", "a", now=0.0, stale_secs=10)
+    t = next_track(t, pane_at(visible=False), "idle", "b", now=2.0, stale_secs=10)
+    t = next_track(t, pane_at(visible=True), "idle", "b", now=4.0, stale_secs=10)
+    t = next_track(t, pane_at(visible=False), "idle", "b", now=6.0, stale_secs=10)
+
+    assert display_state(t) == "idle"
+
+
+def test_idle_agents_found_at_daemon_start_are_not_done():
+    """No history means no evidence the user missed anything — a daemon
+    restart must not flood the list with done rows."""
+    from twmux.lib.watch import display_state, next_track
+
+    t = next_track(None, pane_at(visible=False), "idle", "a", now=0.0, stale_secs=10)
+
+    assert display_state(t) == "idle"
+
+
+def test_hook_done_out_of_sight_is_done():
+    from twmux.lib.watch import display_state, next_track
+
+    t = next_track(None, pane_at(False, "working"), "unknown", "a", now=0.0, stale_secs=10)
+    t = next_track(t, pane_at(False, "done"), "unknown", "b", now=2.0, stale_secs=10)
+
+    assert display_state(t) == "done"
+
+
+def test_state_priority_done_between_wait_and_idle():
+    assert state_priority("wait") > state_priority("done") > state_priority("idle")
+
+
+def test_sort_puts_done_after_wait_and_before_idle():
+    rows = [
+        make_row("idle", entered_at=300.0, pane_id="%1"),
+        make_row("done", entered_at=100.0, pane_id="%2"),
+        make_row("wait", entered_at=200.0, pane_id="%3"),
+    ]
+
+    out = sort_rows(rows, now=400.0)
+
+    assert [r.pane_id for r in out] == ["%3", "%2", "%1"]

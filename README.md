@@ -512,6 +512,9 @@ tmux switcher.
    title, captures the visible content of the matched panes only, and
    classifies the state per the regex rules in `~/.config/twmux/agents.toml`:
    - **wait** — agent is blocked on user input
+   - **done** — agent finished while its window was out of sight; turns
+     `idle` once a poll finds its window in front of you (active window of an
+     attached session — a visit shorter than `poll_interval` is not counted)
    - **working** — agent is actively processing
    - **idle** — agent is at its prompt, nothing happening
 3. State, waiting-time, and per-pane metadata are written — sorted by
@@ -586,15 +589,15 @@ supplies the column names itself):
 | # | Column | Meaning |
 | --- | --- | --- |
 | 1 | `wait` | Human-readable time in the current state (`12s`, `5m04s`, `1h2m`); `-` while `working` |
-| 2 | `state` | `wait` \| `working` \| `idle` \| `unknown` |
+| 2 | `state` | `wait` \| `done` \| `working` \| `idle` \| `unknown` |
 | 3 | `agent` | Name of the `agents.toml` section that matched this pane |
 | 4 | `target` | `session:window.pane` address — the switcher's preview and jump both key off this |
 | 5 | `project` | Basename of the pane's working directory |
 | 6 | `title` | The pane's `pane_title`. For Claude Code this is its current task, set automatically via OSC escapes; set your own on any pane with `tmux select-pane -T "label"` |
 | 7 | `last_line` | Last non-blank line of the captured pane content |
 
-Rows are **sorted by urgency**: first by state (`wait` → `idle` → `working` →
-`unknown`), then within each bucket the shortest time-in-state first — so panes
+Rows are **sorted by urgency**: first by state (`wait` → `done` → `idle` →
+`working` → `unknown`), then within each bucket the shortest time-in-state first — so panes
 that just changed sit at the top and the long-idle tail sinks to the bottom.
 Inspect it any time with `cat ~/.cache/twmux/agents.tsv`. An empty or absent
 file means no panes matched (or the daemon isn't running).

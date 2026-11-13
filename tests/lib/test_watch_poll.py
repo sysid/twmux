@@ -31,7 +31,7 @@ def test_poll_server_keys_state_by_socket_and_pane(session, pane):
     socket is a different agent: its state must not be read or overwritten."""
     pane.cmd("select-pane", "-T", "fake-agent: x")
     other_socket = ("some-other-socket", pane.pane_id)
-    other_track = Track("working", 1.0, "h", 1.0, "", False)
+    other_track = Track("working", 1.0, "h", 1.0, "", False, 1.0)
     state_map = {other_socket: other_track}
 
     (row,) = poll_server(
