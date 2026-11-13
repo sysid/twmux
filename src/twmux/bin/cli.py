@@ -248,6 +248,8 @@ def send(
 
     Sends text, waits, then sends Enter and verifies the pane content changed.
     Retries Enter if verification fails (solves the "lost Enter" problem).
+    Text is sent literally (key names like "C-c" are typed, not pressed);
+    multi-line text is pasted as one bracketed paste, so newlines never submit.
 
     JSON: {"ok": true, "success": bool, "attempts": int}
     Error: {"ok": false, "error": str}

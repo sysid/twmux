@@ -408,7 +408,9 @@ output = twmux(["capture", "-t", "%0"])["content"]
 ### Race-Condition-Safe Send
 
 The `send` command:
-1. Sends text without Enter
+1. Sends text without Enter — literally (`"C-c"` is typed, not pressed);
+   multi-line text as one bracketed paste, so embedded newlines never submit
+   early (an agent TUI receives the whole prompt; Enter submits it)
 2. Waits (configurable delay)
 3. Captures pane content
 4. Sends Enter
