@@ -604,3 +604,113 @@ def test_sort_puts_done_after_wait_and_before_idle():
     out = sort_rows(rows, now=400.0)
 
     assert [r.pane_id for r in out] == ["%3", "%2", "%1"]
+
+
+# -- agents.json ---------------------------------------------------------------
+
+
+def test_render_json_carries_socket_pane_and_epoch_for_tools():
+    import json
+
+    from twmux.lib.watch import render_json
+
+    row = make_row("done", entered_at=100.0, pane_id="%4", title="t")
+
+    (entry,) = json.loads(render_json([row]))
+
+    assert entry == {
+        "socket": "sock",
+        "pane_id": "%4",
+        "target": "sess:1.4",
+        "project": "proj",
+        "agent": "claude_code",
+        "state": "done",
+        "state_entered_at": 100.0,
+        "title": "t",
+    }
+
+
+# -- pick_next: jump to the newest waiting/done agent, cycling -------------------
+
+
+def row_on(socket, pane_id, state, entered_at):
+    return AgentRow(
+        pane_id=pane_id,
+        socket=socket,
+        target=f"s:1.{pane_id.lstrip('%')}",
+        project="p",
+        agent="claude_code",
+        state=state,
+        state_entered_at=entered_at,
+        title="",
+        last_line="",
+    )
+
+
+def test_pick_next_takes_the_most_recent_wait_or_done_agent():
+    from twmux.lib.watch import pick_next
+
+    rows = [
+        row_on("main", "%1", "done", 100.0),
+        row_on("main", "%2", "wait", 300.0),
+        row_on("main", "%3", "working", 400.0),
+        row_on("main", "%4", "idle", 500.0),
+    ]
+
+    picked, _ = pick_next(rows, socket="main", current_pane="", cursor=None)
+
+    assert picked.pane_id == "%2"
+
+
+def test_pick_next_cycles_to_older_agents_on_repeated_calls():
+    from twmux.lib.watch import pick_next
+
+    rows = [row_on("main", "%1", "done", 100.0), row_on("main", "%2", "wait", 300.0)]
+
+    first, cursor = pick_next(rows, "main", "", None)
+    second, cursor = pick_next(rows, "main", "", cursor)
+    third, cursor = pick_next(rows, "main", "", cursor)
+
+    assert [first.pane_id, second.pane_id, third.pane_id] == ["%2", "%1", "%2"]
+
+
+def test_pick_next_restarts_at_the_newest_when_another_agent_finishes():
+    from twmux.lib.watch import pick_next
+
+    rows = [row_on("main", "%1", "done", 100.0), row_on("main", "%2", "wait", 300.0)]
+    _, cursor = pick_next(rows, "main", "", None)
+    _, cursor = pick_next(rows, "main", "", cursor)
+
+    rows.append(row_on("main", "%3", "done", 600.0))
+    picked, _ = pick_next(rows, "main", "", cursor)
+
+    assert picked.pane_id == "%3"
+
+
+def test_pick_next_skips_the_pane_the_user_is_in():
+    from twmux.lib.watch import pick_next
+
+    rows = [row_on("main", "%1", "done", 100.0), row_on("main", "%2", "wait", 300.0)]
+
+    picked, _ = pick_next(rows, "main", current_pane="%2", cursor=None)
+
+    assert picked.pane_id == "%1"
+
+
+def test_pick_next_only_considers_agents_on_the_callers_server():
+    """switch-client can only reach panes on the client's own tmux server."""
+    from twmux.lib.watch import pick_next
+
+    rows = [row_on("other", "%1", "wait", 900.0), row_on("main", "%1", "done", 100.0)]
+
+    picked, _ = pick_next(rows, "main", "", None)
+
+    assert (picked.socket, picked.pane_id) == ("main", "%1")
+
+
+def test_pick_next_without_candidates_picks_nothing():
+    from twmux.lib.watch import pick_next
+
+    picked, _ = pick_next([row_on("main", "%1", "working", 1.0)], "main", "", None)
+
+    assert picked is None

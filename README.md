@@ -602,6 +602,11 @@ that just changed sit at the top and the long-idle tail sinks to the bottom.
 Inspect it any time with `cat ~/.cache/twmux/agents.tsv`. An empty or absent
 file means no panes matched (or the daemon isn't running).
 
+For tools, the daemon writes the same rows, in the same order, as a JSON array
+to `~/.cache/twmux/agents.json`. Each entry has `socket`, `pane_id`, `target`,
+`project`, `agent`, `state`, `state_entered_at` (epoch seconds) and `title` —
+the socket and pane id address a pane unambiguously, the TSV target does not.
+
 ### Setup
 
 ```bash
@@ -618,7 +623,14 @@ chmod +x ~/.config/tmux/tmux-agent-switcher
 
 # In ~/.config/tmux/tmux.conf
 bind-key a display-popup -h 80% -w 90% -E "~/.config/tmux/tmux-agent-switcher"
+# One key, no popup: jump to the newest waiting/done agent; press again to
+# cycle to older ones (restarts at the newest when another agent finishes)
+bind-key n run-shell "twmux watch next"
 ```
+
+`twmux watch next` considers agents on the tmux server you are on (a client
+cannot switch to another server's panes) and skips the pane you are in. It
+reads `~/.cache/twmux/agents.json`, so it is as fresh as the last poll.
 
 Pick a daemon-startup method — see "Daemon lifecycle" below.
 
@@ -768,6 +780,7 @@ twmux watch daemon                   # foreground poll loop (Ctrl-C to stop)
 twmux watch daemon --ensure-running  # exit silently if a daemon is running
 twmux watch stop                     # SIGTERM the running daemon, wait for exit
 twmux watch status                   # one-shot TSV dump for debugging
+twmux watch next                     # jump to newest wait/done agent (cycles)
 twmux mark working --agent NAME      # agent hooks: report state (see above)
 ```
 

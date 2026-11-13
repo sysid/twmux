@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import json
 import logging
 import os
 import re
@@ -268,6 +269,62 @@ def parse_snapshot(lines: list[str]) -> list[PaneInfo]:
     return panes
 
 
+def render_json(rows: list[AgentRow]) -> str:
+    """Serialize rows for tools (`twmux watch next`, scripts): unlike the TSV,
+    it carries the socket, pane id and epoch timestamps."""
+    return json.dumps(
+        [
+            {
+                "socket": r.socket,
+                "pane_id": r.pane_id,
+                "target": r.target,
+                "project": r.project,
+                "agent": r.agent,
+                "state": r.state,
+                "state_entered_at": r.state_entered_at,
+                "title": r.title,
+            }
+            for r in rows
+        ]
+    )
+
+
+def rows_from_json(text: str) -> list[AgentRow]:
+    return [AgentRow(**entry, last_line="") for entry in json.loads(text)]
+
+
+def pick_next(
+    rows: list[AgentRow],
+    socket: str,
+    current_pane: str,
+    cursor: dict | None,
+) -> tuple[AgentRow | None, dict | None]:
+    """Choose the agent `twmux watch next` jumps to.
+
+    Candidates are wait/done agents on the caller's server (switch-client
+    cannot reach other servers), except the pane the caller is in, newest
+    state change first. Repeated calls walk to older candidates; the walk
+    restarts at the newest when the newest changes (another agent finished).
+    Returns (row, cursor to pass to the next call).
+    """
+    candidates = sorted(
+        (
+            r
+            for r in rows
+            if r.state in ("wait", "done") and r.socket == socket and r.pane_id != current_pane
+        ),
+        key=lambda r: (-r.state_entered_at, r.pane_id),
+    )
+    if not candidates:
+        return None, None
+    newest = candidates[0]
+    head = f"{newest.pane_id}@{newest.state_entered_at}"
+    index = 0
+    if cursor is not None and cursor.get("head") == head:
+        index = (cursor.get("index", 0) + 1) % len(candidates)
+    return candidates[index], {"head": head, "index": index}
+
+
 # ----------------------------------------------------------------------------
 # Config loading
 # ----------------------------------------------------------------------------
@@ -332,6 +389,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
 
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "twmux"
 TSV_PATH = CACHE_DIR / "agents.tsv"
+JSON_PATH = CACHE_DIR / "agents.json"
+NEXT_CURSOR_PATH = CACHE_DIR / "next.json"
 PID_PATH = CACHE_DIR / "watch.pid"
 LOG_PATH = CACHE_DIR / "watch.log"
 
@@ -655,6 +714,7 @@ def run_daemon(
                 rows = _poll_once(config, state_map, now)
                 sorted_rows = sort_rows(rows, now)
                 _atomic_write(TSV_PATH, render_tsv(sorted_rows, now))
+                _atomic_write(JSON_PATH, render_json(sorted_rows))
             except Exception:
                 # Don't let a transient libtmux/socket hiccup kill the daemon;
                 # log and continue. A genuinely broken setup will log every
@@ -720,3 +780,53 @@ def run_status_once(config: Config) -> str:
     now = time.time()
     rows = _poll_once(config, state_map, now)
     return render_tsv(sort_rows(rows, now), now)
+
+
+def jump_next(socket_path: str) -> AgentRow | None:
+    """Switch the caller's tmux client to the agent pick_next chooses.
+
+    Reads the daemon's agents.json, so it is as fresh as the last poll.
+    Returns the row jumped to, or None when there is nothing to jump to.
+    Raises FileNotFoundError when the daemon has never written agents.json.
+    """
+    from libtmux import Server
+
+    server = Server(socket_path=socket_path)
+    rows = rows_from_json(JSON_PATH.read_text())
+    # The client that pressed the key is the most recently active one. Ask
+    # tmux rather than $TMUX_PANE: run-shell jobs inherit the server's global
+    # environment, whose TMUX_PANE is whatever pane started the server.
+    clients = server.cmd("list-clients", "-F", "#{client_activity} #{client_name} #{pane_id}")
+    if not clients.stdout:
+        raise RuntimeError("no tmux client attached")
+    _, client, current_pane = max(line.split(" ") for line in clients.stdout)
+    try:
+        cursor = json.loads(NEXT_CURSOR_PATH.read_text())
+    except (OSError, ValueError):
+        cursor = None
+
+    socket = os.path.basename(socket_path)
+    row, cursor = pick_next(rows, socket, current_pane, cursor)
+    if row is None:
+        return None
+
+    pane = row.pane_id
+    result = server.cmd(
+        "switch-client",
+        "-c",
+        client,
+        "-t",
+        pane,
+        ";",
+        "select-window",
+        "-t",
+        pane,
+        ";",
+        "select-pane",
+        "-t",
+        pane,
+    )
+    if result.stderr:
+        raise RuntimeError("; ".join(result.stderr))
+    _atomic_write(NEXT_CURSOR_PATH, json.dumps(cursor))
+    return row

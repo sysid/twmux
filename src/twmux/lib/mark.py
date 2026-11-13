@@ -28,7 +28,7 @@ OPT_AGENT = "@twmux_agent"
 ALL_OPTIONS = (OPT_STATE, OPT_STATE_TS, OPT_CMD, OPT_AGENT)
 
 
-def hook_pane_from_env(env: dict[str, str] | os._Environ = os.environ) -> tuple[str, str] | None:
+def caller_pane_from_env(env: dict[str, str] | os._Environ = os.environ) -> tuple[str, str] | None:
     """(socket path, pane id) of the pane this process runs in, or None.
 
     Hooks inherit $TMUX ("<socket path>,<server pid>,<session>") and

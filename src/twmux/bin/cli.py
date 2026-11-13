@@ -449,13 +449,13 @@ def mark(
     """
     from libtmux import Server
 
-    from twmux.lib.mark import HOOK_STATES, hook_pane_from_env, mark_pane, opted_out
+    from twmux.lib.mark import HOOK_STATES, caller_pane_from_env, mark_pane, opted_out
 
     if state not in (*HOOK_STATES, "clear"):
         error_result(f"Invalid state '{state}': use {', '.join(HOOK_STATES)} or clear")
         raise typer.Exit(1)
 
-    hook_pane = hook_pane_from_env()
+    hook_pane = caller_pane_from_env()
     if hook_pane is None or opted_out():
         if json_output:
             output_result({"marked": False})
@@ -1223,6 +1223,50 @@ def watch_stop() -> None:
     else:
         rprint(f"[yellow]timeout waiting for pid={result.pid} to exit[/yellow]")
         raise typer.Exit(1)
+
+
+@watch_app.command("next")
+def watch_next() -> None:
+    """Jump to the newest waiting or done agent; repeat to cycle older ones.
+
+    Meant for a tmux key binding:  bind n run-shell "twmux watch next"
+    Considers agents on the caller's tmux server only, skips the pane you
+    are in, and restarts at the newest whenever another agent finishes.
+    Silent on success (tmux shows run-shell output in a view pane); says
+    "no agent waiting" via tmux display-message instead.
+
+    JSON: {"ok": true, "jumped": bool, "pane_id"?: str, "state"?: str}
+    Exit: 0 jumped or nothing to do, 1 outside tmux, daemon not running,
+    or tmux failure.
+    """
+    import os
+
+    from libtmux import Server
+
+    from twmux.lib.watch import jump_next
+
+    socket_path = os.environ.get("TMUX", "").split(",")[0]
+    if not socket_path:
+        error_result("not inside tmux ($TMUX unset)")
+        raise typer.Exit(1)
+
+    try:
+        row = jump_next(socket_path)
+    except FileNotFoundError:
+        error_result("no agents.json — is 'twmux watch daemon' running?")
+        raise typer.Exit(1)
+    except Exception as e:
+        error_result(f"Cannot jump: {e}")
+        raise typer.Exit(1)
+
+    if row is None:
+        if json_output:
+            output_result({"jumped": False})
+        else:
+            Server(socket_path=socket_path).cmd("display-message", "no agent waiting or done")
+        return
+    if json_output:
+        output_result({"jumped": True, "pane_id": row.pane_id, "state": row.state})
 
 
 @watch_app.command("status")
