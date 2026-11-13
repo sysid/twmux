@@ -140,3 +140,21 @@ def test_poll_rows_carry_their_window_id(session, pane):
     (row,) = poll(session)
 
     assert row.window_id == session.active_window.window_id
+
+
+def test_sync_summary_sets_and_clears_the_global_option(session, pane):
+    from twmux.lib.watch import sync_summary
+
+    server = session.server
+    written: dict = {}
+
+    def summary_option():
+        out = server.cmd("show-options", "-g", "-v", "@twmux_summary").stdout
+        return out[0] if out else None
+
+    sync_summary(server, "💬1", written)
+    assert summary_option() == "💬1"
+
+    sync_summary(server, "", written)
+    assert summary_option() is None
+    assert written == {}

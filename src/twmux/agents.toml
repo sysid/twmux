@@ -32,6 +32,8 @@ hook_stale_secs = 10.0
 # Status-bar icon the daemon writes to the window option @twmux_status (the
 # window's most urgent agent; idle windows get none). "" disables a state.
 # Show it with '#{?@twmux_status, #{@twmux_status},}' in window-status-format.
+# The same wait/done icons, counted per server, go to the global option
+# @twmux_summary (e.g. "💬1 ✅2") for status-right.
 status_icons = { wait = "💬", done = "✅", working = "🤖" }
 
 [codex_cli]

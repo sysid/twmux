@@ -638,6 +638,16 @@ set -g window-status-format         '#I:#W#{?@twmux_status, #{@twmux_status},}#F
 set -g window-status-current-format '#I:#W#{?@twmux_status, #{@twmux_status},}#F'
 ```
 
+The window list only shows the windows of the current session, so an agent
+waiting in another session stays invisible there. For that, the daemon also
+sets the global option `@twmux_summary` per tmux server, counting its waiting
+and done agents (e.g. `💬1 ✅2`; unset when there are none). Put it in
+`status-right` to see from any session that someone needs you:
+
+```tmux
+set -g status-right '#{?@twmux_summary,#{@twmux_summary} | ,}...your existing status-right...'
+```
+
 `twmux watch next` considers agents on the tmux server you are on (a client
 cannot switch to another server's panes) and skips the pane you are in. It
 reads `~/.cache/twmux/agents.json`, so it is as fresh as the last poll.

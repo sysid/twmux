@@ -779,3 +779,32 @@ def test_load_config_status_icons_table_is_not_an_agent(tmp_path):
     path.write_text('[status_icons]\nwait = "?"\n')
 
     assert load_config(path).agents == []
+
+
+# -- server-wide summary ---------------------------------------------------------
+
+
+def test_summary_counts_agents_that_need_the_user():
+    from twmux.lib.watch import summary
+
+    rows = [
+        row_in_window("@1", "wait", "%1"),
+        row_in_window("@2", "done", "%2"),
+        row_in_window("@3", "done", "%3"),
+        row_in_window("@4", "working", "%4"),
+        row_in_window("@5", "idle", "%5"),
+    ]
+
+    assert summary(rows, ICONS) == "W1 D2"
+
+
+def test_summary_leaves_out_states_without_agents():
+    from twmux.lib.watch import summary
+
+    assert summary([row_in_window("@1", "done")], ICONS) == "D1"
+
+
+def test_summary_is_empty_when_nobody_needs_the_user():
+    from twmux.lib.watch import summary
+
+    assert summary([row_in_window("@1", "working")], ICONS) == ""
