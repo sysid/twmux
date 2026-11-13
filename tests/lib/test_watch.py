@@ -295,7 +295,22 @@ def test_parse_snapshot_reads_one_pane_per_line():
     from twmux.lib.watch import parse_snapshot
 
     line = "\x1f".join(
-        ["%7", "node", "⠐ codex | fix", "/src/proj", "work", "@3", "2", "1", "1", "1", "", "", ""]
+        [
+            "%7",
+            "node",
+            "⠐ codex | fix",
+            "/src/proj",
+            "work",
+            "@3",
+            "2",
+            "1",
+            "1",
+            "1",
+            "",
+            "",
+            "",
+            "",
+        ]
     )
 
     (pane,) = parse_snapshot([line])
@@ -312,7 +327,7 @@ def test_parse_snapshot_reads_one_pane_per_line():
 def test_parse_snapshot_pane_in_inactive_window_is_not_visible():
     from twmux.lib.watch import parse_snapshot
 
-    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "0", "1", "", "", ""])
+    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "0", "1", "", "", "", ""])
 
     (pane,) = parse_snapshot([line])
 
@@ -322,7 +337,7 @@ def test_parse_snapshot_pane_in_inactive_window_is_not_visible():
 def test_parse_snapshot_pane_in_detached_session_is_not_visible():
     from twmux.lib.watch import parse_snapshot
 
-    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "1", "0", "", "", ""])
+    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "1", "0", "", "", "", ""])
 
     (pane,) = parse_snapshot([line])
 
@@ -341,7 +356,22 @@ def test_parse_snapshot_reads_the_hook_mark_made_under_the_current_command():
     from twmux.lib.watch import parse_snapshot
 
     line = "\x1f".join(
-        ["%7", "2.1.139", "x", "/", "s", "@3", "2", "1", "1", "1", "wait", "2.1.139", "cc"]
+        [
+            "%7",
+            "2.1.139",
+            "x",
+            "/",
+            "s",
+            "@3",
+            "2",
+            "1",
+            "1",
+            "1",
+            "wait",
+            "1700000000",
+            "2.1.139",
+            "cc",
+        ]
     )
 
     (pane,) = parse_snapshot([line])
@@ -355,7 +385,22 @@ def test_parse_snapshot_drops_the_hook_mark_once_the_command_changed():
     from twmux.lib.watch import parse_snapshot
 
     line = "\x1f".join(
-        ["%7", "bash", "x", "/", "s", "@3", "2", "1", "1", "1", "wait", "2.1.139", "cc"]
+        [
+            "%7",
+            "bash",
+            "x",
+            "/",
+            "s",
+            "@3",
+            "2",
+            "1",
+            "1",
+            "1",
+            "wait",
+            "1700000000",
+            "2.1.139",
+            "cc",
+        ]
     )
 
     (pane,) = parse_snapshot([line])
@@ -367,8 +412,113 @@ def test_parse_snapshot_drops_the_hook_mark_once_the_command_changed():
 def test_parse_snapshot_ignores_an_unknown_hook_state():
     from twmux.lib.watch import parse_snapshot
 
-    line = "\x1f".join(["%7", "bash", "x", "/", "s", "@3", "2", "1", "1", "1", "busy", "bash", ""])
+    line = "\x1f".join(
+        ["%7", "bash", "x", "/", "s", "@3", "2", "1", "1", "1", "busy", "1", "bash", ""]
+    )
 
     (pane,) = parse_snapshot([line])
 
     assert pane.hook_state is None
+
+
+# -- next_track: hook staleness ------------------------------------------------
+#
+# Hooks miss events: Ctrl-C/Escape fire no Stop hook, a rejected permission
+# prompt fires nothing. The screen is the cross-check.
+
+
+def hooked_pane(hook_state, hook_ts="1700000000"):
+    from twmux.lib.watch import PaneInfo
+
+    return PaneInfo(
+        pane_id="%1",
+        command="2.1.139",
+        title="",
+        path="/p",
+        target="s:1.1",
+        window_id="@1",
+        visible=False,
+        hook_state=hook_state,
+        hook_ts=hook_ts,
+    )
+
+
+def test_working_hook_holds_while_the_screen_keeps_changing():
+    from twmux.lib.watch import next_track
+
+    t = next_track(None, hooked_pane("working"), "idle", "h1", now=0.0, stale_secs=10)
+    t = next_track(t, hooked_pane("working"), "idle", "h2", now=8.0, stale_secs=10)
+    t = next_track(t, hooked_pane("working"), "idle", "h3", now=16.0, stale_secs=10)
+
+    assert t.state == "working"
+
+
+def test_working_hook_goes_stale_when_the_screen_freezes():
+    """Ctrl-C: the agent stops without a Stop hook. A working agent redraws its
+    spinner every second, so a frozen screen means it is not working."""
+    from twmux.lib.watch import next_track
+
+    t = next_track(None, hooked_pane("working"), "idle", "same", now=0.0, stale_secs=10)
+    t = next_track(t, hooked_pane("working"), "idle", "same", now=9.0, stale_secs=10)
+    assert t.state == "working"
+
+    t = next_track(t, hooked_pane("working"), "idle", "same", now=10.0, stale_secs=10)
+    assert t.state == "idle"
+
+
+def test_wait_hook_holds_on_a_static_screen():
+    """A permission prompt does not redraw; a frozen screen is expected."""
+    from twmux.lib.watch import next_track
+
+    t = next_track(None, hooked_pane("wait"), "idle", "prompt", now=0.0, stale_secs=10)
+    t = next_track(t, hooked_pane("wait"), "idle", "prompt", now=600.0, stale_secs=10)
+
+    assert t.state == "wait"
+
+
+def test_wait_hook_goes_stale_once_the_screen_changed_and_settled():
+    """The user rejected the prompt with Escape — no hook fires, but the
+    screen changed after the mark and then stayed put."""
+    from twmux.lib.watch import next_track
+
+    t = next_track(None, hooked_pane("wait"), "idle", "prompt", now=0.0, stale_secs=10)
+    t = next_track(t, hooked_pane("wait"), "idle", "rejected", now=2.0, stale_secs=10)
+    assert t.state == "wait"
+
+    t = next_track(t, hooked_pane("wait"), "idle", "rejected", now=12.0, stale_secs=10)
+    assert t.state == "idle"
+
+
+def test_a_new_mark_is_trusted_again():
+    from twmux.lib.watch import next_track
+
+    t = next_track(None, hooked_pane("wait", "1"), "idle", "a", now=0.0, stale_secs=10)
+    t = next_track(t, hooked_pane("wait", "1"), "idle", "b", now=2.0, stale_secs=10)
+    t = next_track(t, hooked_pane("wait", "1"), "idle", "b", now=12.0, stale_secs=10)
+    assert t.state == "idle"
+
+    t = next_track(t, hooked_pane("wait", "2"), "idle", "b", now=14.0, stale_secs=10)
+    assert t.state == "wait"
+
+
+def test_next_track_keeps_entered_at_while_the_state_holds():
+    from twmux.lib.watch import next_track
+
+    t = next_track(None, hooked_pane("wait"), "idle", "a", now=5.0, stale_secs=10)
+    t = next_track(t, hooked_pane("wait"), "idle", "a", now=50.0, stale_secs=10)
+
+    assert t.entered_at == 5.0
+
+
+def test_load_config_reads_hook_stale_secs(tmp_path):
+    path = tmp_path / "agents.toml"
+    path.write_text("hook_stale_secs = 30\n")
+
+    assert load_config(path).hook_stale_secs == 30.0
+
+
+def test_load_config_defaults_hook_stale_secs_to_ten(tmp_path):
+    path = tmp_path / "agents.toml"
+    path.write_text("poll_interval = 2.0\n")
+
+    assert load_config(path).hook_stale_secs == 10.0

@@ -541,6 +541,13 @@ Rules the daemon applies:
 - A hook state beats the regex state, **except** a `wait` prompt on screen,
   which always wins (some permission prompts emit no hook).
 - `done` reads as the agent being back at its prompt (`idle`).
+- Hooks miss events (Ctrl-C fires no `Stop`; a rejected permission prompt fires
+  nothing), so the screen cross-checks them. `working` goes stale once the pane
+  content has been frozen for `hook_stale_secs` (default 10) — a working agent
+  redraws its spinner every second. `wait`/`done` screens are static by nature;
+  they go stale only if the content changed *after* the mark and then settled
+  for `hook_stale_secs`. A stale mark falls back to the regex state; the next
+  mark is trusted again.
 - A mark recorded while the pane ran another command than it runs now (the
   agent exited back to the shell) is ignored.
 - A marked pane is listed even when no `agents.toml` regex recognises it;
@@ -715,7 +722,8 @@ terminal_title = ["spinner", "app-name", "project"]
 ```
 
 ```toml
-poll_interval = 2.0   # seconds
+poll_interval = 2.0     # seconds
+hook_stale_secs = 10.0  # see "Agent hooks"
 
 [codex_cli]
 # Keep this before Claude: both use a braille spinner while working.

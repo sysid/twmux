@@ -3,7 +3,7 @@
 import time
 
 from twmux.lib.classify import AgentConfig
-from twmux.lib.watch import Config, poll_server
+from twmux.lib.watch import Config, Track, poll_server
 
 # The test shell's prompt is "$ " (see conftest), so an idle "agent" is a
 # bash pane whose title marks it as one.
@@ -31,7 +31,8 @@ def test_poll_server_keys_state_by_socket_and_pane(session, pane):
     socket is a different agent: its state must not be read or overwritten."""
     pane.cmd("select-pane", "-T", "fake-agent: x")
     other_socket = ("some-other-socket", pane.pane_id)
-    state_map = {other_socket: ("working", 1.0)}
+    other_track = Track("working", 1.0, "h", 1.0, "", False)
+    state_map = {other_socket: other_track}
 
     (row,) = poll_server(
         session.server, Config(poll_interval=2.0, agents=[FAKE_AGENT]), state_map, 100.0
@@ -39,8 +40,8 @@ def test_poll_server_keys_state_by_socket_and_pane(session, pane):
 
     assert row.state == "idle"
     assert row.state_entered_at == 100.0
-    assert state_map[other_socket] == ("working", 1.0)
-    assert state_map[(session.server.socket_name, pane.pane_id)] == ("idle", 100.0)
+    assert state_map[other_socket] is other_track
+    assert state_map[(session.server.socket_name, pane.pane_id)].state == "idle"
 
 
 def mark(pane, state, agent="", command=None):

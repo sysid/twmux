@@ -9,6 +9,7 @@ Split into two layers:
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import logging
 import os
 import re
@@ -23,7 +24,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from twmux.lib.classify import AgentConfig, classify
-from twmux.lib.mark import HOOK_STATES, OPT_AGENT, OPT_CMD, OPT_STATE
+from twmux.lib.mark import HOOK_STATES, OPT_AGENT, OPT_CMD, OPT_STATE, OPT_STATE_TS
 from twmux.lib.safety import enumerate_all_sockets, get_socket_dir
 
 State = str  # "wait" | "working" | "idle" | "unknown"
@@ -121,6 +122,66 @@ def observe_state(hook_state: State | None, scraped: State) -> State:
     return "idle" if hook_state == "done" else hook_state
 
 
+@dataclass(frozen=True)
+class Track:
+    """What the daemon remembers about one agent pane between polls."""
+
+    state: State
+    entered_at: float  # when `state` began
+    content_hash: str
+    stable_since: float  # when the captured content last changed
+    hook_ts: str  # the mark these flags refer to
+    changed_since_mark: bool  # content changed after the first poll of that mark
+
+
+def hook_is_stale(
+    hook_state: State, stable_for: float, changed_since_mark: bool, stale_secs: float
+) -> bool:
+    """Whether the screen contradicts the agent's last mark.
+
+    Hooks miss events: Ctrl-C/Escape fire no Stop hook, a rejected
+    permission prompt fires nothing. A working agent redraws its spinner
+    every second, so `working` is stale once the screen has been frozen for
+    stale_secs. Wait and done screens are static by nature; they are stale
+    only if the screen changed after the mark — something happened that no
+    hook reported — and has since settled.
+    """
+    if stable_for < stale_secs:
+        return False
+    return hook_state == "working" or changed_since_mark
+
+
+def next_track(
+    prev: Track | None,
+    pane: PaneInfo,
+    scraped: State,
+    content_hash: str,
+    now: float,
+    stale_secs: float,
+) -> Track:
+    """Fold one poll's observation of a pane into its track."""
+    content_changed = prev is not None and prev.content_hash != content_hash
+    stable_since = prev.stable_since if prev is not None and not content_changed else now
+    same_mark = prev is not None and prev.hook_ts == pane.hook_ts
+    changed_since_mark = same_mark and (prev.changed_since_mark or content_changed)
+
+    hook = pane.hook_state
+    if hook is not None and hook_is_stale(hook, now - stable_since, changed_since_mark, stale_secs):
+        hook = None
+    observed = observe_state(hook, scraped)
+
+    prev_state = (prev.state, prev.entered_at) if prev is not None else None
+    state, entered_at = merge_state(prev_state, observed, now)
+    return Track(
+        state=state,
+        entered_at=entered_at,
+        content_hash=content_hash,
+        stable_since=stable_since,
+        hook_ts=pane.hook_ts,
+        changed_since_mark=changed_since_mark,
+    )
+
+
 # Unit separator: cannot appear in session names or paths and is vanishingly
 # rare in pane titles; a line with the wrong field count is dropped.
 _SEP = "\x1f"
@@ -137,6 +198,7 @@ SNAPSHOT_FORMAT = _SEP.join(
         "#{window_active}",
         "#{session_attached}",
         f"#{{{OPT_STATE}}}",
+        f"#{{{OPT_STATE_TS}}}",
         f"#{{{OPT_CMD}}}",
         f"#{{{OPT_AGENT}}}",
     ]
@@ -156,6 +218,7 @@ class PaneInfo:
     window_id: str
     visible: bool  # its window is the active one of an attached session
     hook_state: State | None = None  # from `twmux mark`, None when absent or stale
+    hook_ts: str = ""  # identifies the mark: a new mark resets staleness tracking
     hook_agent: str = ""
 
 
@@ -167,7 +230,8 @@ def parse_snapshot(lines: list[str]) -> list[PaneInfo]:
         if len(fields) != _SNAPSHOT_FIELDS:
             continue
         (pane_id, command, title, path, session, window_id, window_index, pane_index,
-         window_active, session_attached, hook_state, hook_cmd, hook_agent) = fields  # fmt: skip
+         window_active, session_attached,
+         hook_state, hook_ts, hook_cmd, hook_agent) = fields  # fmt: skip
         # A mark made under another command belongs to an agent that has
         # since exited from this pane (e.g. "2.1.139" -> "bash").
         valid_hook = hook_state in HOOK_STATES and hook_cmd == command
@@ -181,6 +245,7 @@ def parse_snapshot(lines: list[str]) -> list[PaneInfo]:
                 window_id=window_id,
                 visible=window_active == "1" and session_attached not in ("", "0"),
                 hook_state=hook_state if valid_hook else None,
+                hook_ts=hook_ts if valid_hook else "",
                 hook_agent=hook_agent if valid_hook else "",
             )
         )
@@ -196,6 +261,7 @@ def parse_snapshot(lines: list[str]) -> list[PaneInfo]:
 class Config:
     poll_interval: float
     agents: list[AgentConfig]
+    hook_stale_secs: float = 10.0
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "twmux" / "agents.toml"
@@ -224,6 +290,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         data = tomllib.load(f)
 
     poll_interval = float(data.pop("poll_interval", 2.0))
+    hook_stale_secs = float(data.pop("hook_stale_secs", 10.0))
     agents = []
     for name, section in data.items():
         if not isinstance(section, dict):
@@ -239,7 +306,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
                 re_idle=section.get("re_idle"),
             )
         )
-    return Config(poll_interval=poll_interval, agents=agents)
+    return Config(poll_interval=poll_interval, agents=agents, hook_stale_secs=hook_stale_secs)
 
 
 # ----------------------------------------------------------------------------
@@ -363,7 +430,7 @@ StateKey = tuple[str, str]  # (socket name, pane id)
 def poll_server(
     server,
     config: Config,
-    state_map: dict[StateKey, tuple[State, float]],
+    state_map: dict[StateKey, Track],
     now: float,
 ) -> list[AgentRow]:
     """Poll one tmux server: one list-panes for every pane, then capture-pane
@@ -388,10 +455,16 @@ def poll_server(
             continue
 
         scraped = classify(text, cfg) if cfg else "unknown"
-        observed = observe_state(pane.hook_state, scraped)
         key = (socket, pane.pane_id)
-        state, entered = merge_state(state_map.get(key), observed, now)
-        state_map[key] = (state, entered)
+        track = next_track(
+            state_map.get(key),
+            pane,
+            scraped,
+            hashlib.md5(text.encode()).hexdigest(),
+            now,
+            config.hook_stale_secs,
+        )
+        state_map[key] = track
         rows.append(
             AgentRow(
                 pane_id=pane.pane_id,
@@ -399,8 +472,8 @@ def poll_server(
                 target=pane.target,
                 project=_basename_cwd(pane.path),
                 agent=cfg.name if cfg else (pane.hook_agent or "agent"),
-                state=state,
-                state_entered_at=entered,
+                state=track.state,
+                state_entered_at=track.entered_at,
                 title=pane.title,
                 last_line=_last_nonblank_line(captured),
             )
@@ -410,7 +483,7 @@ def poll_server(
 
 def _poll_once(
     config: Config,
-    state_map: dict[StateKey, tuple[State, float]],
+    state_map: dict[StateKey, Track],
     now: float,
 ) -> list[AgentRow]:
     """Poll every live socket; prune state of panes that vanished."""
@@ -558,7 +631,7 @@ def run_daemon(
     signal.signal(signal.SIGTERM, _on_sigterm)
 
     logger.info("daemon started pid=%d interval=%.2fs", os.getpid(), config.poll_interval)
-    state_map: dict[str, tuple[State, float]] = {}
+    state_map: dict[StateKey, Track] = {}
     try:
         while True:
             now = time.time()
@@ -627,7 +700,7 @@ def stop_daemon(timeout: float = 5.0, poll_interval: float = 0.1) -> StopResult:
 
 def run_status_once(config: Config) -> str:
     """Single poll + render, return TSV string. Used by `twmux watch status`."""
-    state_map: dict[str, tuple[State, float]] = {}
+    state_map: dict[StateKey, Track] = {}
     now = time.time()
     rows = _poll_once(config, state_map, now)
     return render_tsv(sort_rows(rows, now), now)
