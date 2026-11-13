@@ -21,6 +21,7 @@ def make_row(
 ) -> AgentRow:
     return AgentRow(
         pane_id=pane_id,
+        socket="sock",
         target=f"sess:1.{pane_id.lstrip('%')}",
         project="proj",
         agent="claude_code",
@@ -284,3 +285,53 @@ def test_ensure_config_leaves_existing_file_untouched(tmp_path):
 
     assert created is False
     assert path.read_text() == "poll_interval = 5.0\n"
+
+
+# -- snapshot parsing ----------------------------------------------------------
+
+
+def test_parse_snapshot_reads_one_pane_per_line():
+    """One list-panes call yields every field the poll needs, unit-separated."""
+    from twmux.lib.watch import parse_snapshot
+
+    line = "\x1f".join(
+        ["%7", "node", "⠐ codex | fix", "/src/proj", "work", "@3", "2", "1", "1", "1"]
+    )
+
+    (pane,) = parse_snapshot([line])
+
+    assert pane.pane_id == "%7"
+    assert pane.command == "node"
+    assert pane.title == "⠐ codex | fix"
+    assert pane.path == "/src/proj"
+    assert pane.target == "work:2.1"
+    assert pane.window_id == "@3"
+    assert pane.visible is True
+
+
+def test_parse_snapshot_pane_in_inactive_window_is_not_visible():
+    from twmux.lib.watch import parse_snapshot
+
+    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "0", "1"])
+
+    (pane,) = parse_snapshot([line])
+
+    assert pane.visible is False
+
+
+def test_parse_snapshot_pane_in_detached_session_is_not_visible():
+    from twmux.lib.watch import parse_snapshot
+
+    line = "\x1f".join(["%7", "bash", "", "/", "work", "@3", "2", "1", "1", "0"])
+
+    (pane,) = parse_snapshot([line])
+
+    assert pane.visible is False
+
+
+def test_parse_snapshot_skips_malformed_lines():
+    """A line with the wrong field count (e.g. a title containing the
+    separator) is dropped rather than shifting every later field."""
+    from twmux.lib.watch import parse_snapshot
+
+    assert parse_snapshot(["garbage", ""]) == []

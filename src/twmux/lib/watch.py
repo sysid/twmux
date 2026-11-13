@@ -2,8 +2,8 @@
 
 Split into two layers:
 - Pure logic (sort, merge, format) — unit-tested in tests/lib/test_watch.py.
-- libtmux glue (poll loop, pane enumeration, file I/O) — tested manually
-  per the v1 plan.
+- tmux glue (poll loop, pane enumeration, file I/O) — integration-tested
+  against a hermetic tmux server in tests/lib/test_watch_poll.py.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import fcntl
 import logging
 import os
+import re
 import signal
 import socket as socket_module
 import sys
@@ -35,6 +36,7 @@ class AgentRow:
     """One observed agent pane, with its current state and tracking metadata."""
 
     pane_id: str  # libtmux %N id
+    socket: str  # tmux socket name; pane ids are only unique per server
     target: str  # session:window.pane address for tmux commands
     project: str  # basename of pane cwd (display only)
     agent: str  # agent config name (e.g. "claude_code")
@@ -105,6 +107,62 @@ def render_tsv(rows: list[AgentRow], now: float) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+# Unit separator: cannot appear in session names or paths and is vanishingly
+# rare in pane titles; a line with the wrong field count is dropped.
+_SEP = "\x1f"
+SNAPSHOT_FORMAT = _SEP.join(
+    [
+        "#{pane_id}",
+        "#{pane_current_command}",
+        "#{pane_title}",
+        "#{pane_current_path}",
+        "#{session_name}",
+        "#{window_id}",
+        "#{window_index}",
+        "#{pane_index}",
+        "#{window_active}",
+        "#{session_attached}",
+    ]
+)
+_SNAPSHOT_FIELDS = SNAPSHOT_FORMAT.count(_SEP) + 1
+
+
+@dataclass(frozen=True)
+class PaneInfo:
+    """One pane as reported by a single `list-panes -a -F SNAPSHOT_FORMAT`."""
+
+    pane_id: str
+    command: str
+    title: str
+    path: str
+    target: str  # session:window.pane address for tmux commands
+    window_id: str
+    visible: bool  # its window is the active one of an attached session
+
+
+def parse_snapshot(lines: list[str]) -> list[PaneInfo]:
+    """Parse list-panes output produced with SNAPSHOT_FORMAT."""
+    panes = []
+    for line in lines:
+        fields = line.split(_SEP)
+        if len(fields) != _SNAPSHOT_FIELDS:
+            continue
+        (pane_id, command, title, path, session, window_id, window_index, pane_index,
+         window_active, session_attached) = fields  # fmt: skip
+        panes.append(
+            PaneInfo(
+                pane_id=pane_id,
+                command=command,
+                title=title,
+                path=path,
+                target=f"{session}:{window_index}.{pane_index}",
+                window_id=window_id,
+                visible=window_active == "1" and session_attached not in ("", "0"),
+            )
+        )
+    return panes
+
+
 # ----------------------------------------------------------------------------
 # Config loading
 # ----------------------------------------------------------------------------
@@ -161,7 +219,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
 
 
 # ----------------------------------------------------------------------------
-# libtmux glue — not unit-tested; verified manually per the v1 plan
+# tmux glue — poll_server is integration-tested in tests/lib/test_watch_poll.py
 # ----------------------------------------------------------------------------
 
 
@@ -229,18 +287,6 @@ def _socket_alive(socket_name: str, timeout: float = 0.05) -> bool:
         s.close()
 
 
-def _pane_title(pane) -> str:
-    """Read pane_title via tmux's display-message — libtmux doesn't expose it
-    as an attribute on the Pane object."""
-    try:
-        result = pane.cmd("display-message", "-p", "-t", pane.pane_id, "#{pane_title}")
-        if result.stdout:
-            return result.stdout[0]
-    except Exception:
-        pass
-    return ""
-
-
 def _match_agent(
     cmd: str, title: str, agents: list[AgentConfig], content: str = ""
 ) -> AgentConfig | None:
@@ -251,19 +297,19 @@ def _match_agent(
     config also has content_match, the pane's captured text must satisfy
     that regex too — otherwise we skip to the next candidate.
     """
-    import re
-
     for cfg in agents:
-        hit = False
-        if cfg.cmd_match and re.search(cfg.cmd_match, cmd):
-            hit = True
-        elif cfg.title_match and re.search(cfg.title_match, title):
-            hit = True
-        if hit:
+        if _hits_cmd_or_title(cfg, cmd, title):
             if cfg.content_match and not re.search(cfg.content_match, content, re.MULTILINE):
                 continue
             return cfg
     return None
+
+
+def _hits_cmd_or_title(cfg: AgentConfig, cmd: str, title: str) -> bool:
+    return bool(
+        (cfg.cmd_match and re.search(cfg.cmd_match, cmd))
+        or (cfg.title_match and re.search(cfg.title_match, title))
+    )
 
 
 def _basename_cwd(cwd: str | None) -> str:
@@ -287,74 +333,74 @@ def _atomic_write(path: Path, content: str) -> None:
     tmp.replace(path)
 
 
-def _poll_once(
+StateKey = tuple[str, str]  # (socket name, pane id)
+
+
+def poll_server(
+    server,
     config: Config,
-    state_map: dict[str, tuple[State, float]],
+    state_map: dict[StateKey, tuple[State, float]],
     now: float,
 ) -> list[AgentRow]:
-    """Enumerate every pane across every socket; build a fresh row list and
-    update state_map in place (prune panes that vanished)."""
+    """Poll one tmux server: one list-panes for every pane, then capture-pane
+    only for panes that look like agents. Updates state_map in place for the
+    panes seen here; pruning vanished panes is the caller's job, because the
+    map spans all sockets."""
+    socket = server.socket_name
+    snapshot = parse_snapshot(server.cmd("list-panes", "-a", "-F", SNAPSHOT_FORMAT).stdout)
+
+    rows: list[AgentRow] = []
+    for pane in snapshot:
+        # Capture only panes some agent claims by command or title: capturing
+        # is the expensive part, and most panes are plain shells and editors.
+        if not any(_hits_cmd_or_title(c, pane.command, pane.title) for c in config.agents):
+            continue
+        captured = server.cmd("capture-pane", "-p", "-t", pane.pane_id).stdout
+        text = "\n".join(captured)
+        cfg = _match_agent(pane.command, pane.title, config.agents, content=text)
+        if cfg is None:
+            continue
+
+        key = (socket, pane.pane_id)
+        state, entered = merge_state(state_map.get(key), classify(text, cfg), now)
+        state_map[key] = (state, entered)
+        rows.append(
+            AgentRow(
+                pane_id=pane.pane_id,
+                socket=socket,
+                target=pane.target,
+                project=_basename_cwd(pane.path),
+                agent=cfg.name,
+                state=state,
+                state_entered_at=entered,
+                title=pane.title,
+                last_line=_last_nonblank_line(captured),
+            )
+        )
+    return rows
+
+
+def _poll_once(
+    config: Config,
+    state_map: dict[StateKey, tuple[State, float]],
+    now: float,
+) -> list[AgentRow]:
+    """Poll every live socket; prune state of panes that vanished."""
     from libtmux import Server
 
     rows: list[AgentRow] = []
-    seen: set[str] = set()
-
     for sock in enumerate_all_sockets():
         if not _socket_alive(sock):
             continue
         try:
-            server = Server(socket_name=sock)
-            sessions = server.sessions
+            rows.extend(poll_server(Server(socket_name=sock), config, state_map, now))
         except Exception:
+            # A server dying mid-poll must not hide the agents on the others.
             continue
 
-        for session in sessions:
-            for window in session.windows:
-                for pane in window.panes:
-                    cmd = pane.pane_current_command or ""
-                    title = _pane_title(pane)
-
-                    # Capture visible area before matching so content_match
-                    # can gate agent identification (e.g. "node" + footer).
-                    captured = pane.capture_pane() or []
-                    text = "\n".join(captured)
-
-                    cfg = _match_agent(cmd, title, config.agents, content=text)
-                    if cfg is None:
-                        continue
-
-                    state = classify(text, cfg)
-
-                    # libtmux types pane_id as Optional[str] because it's
-                    # generic across all tmux format vars, but tmux always
-                    # populates #{pane_id} for a real pane. Assert the
-                    # invariant so a contract change would fail loudly here
-                    # rather than silently corrupt state_map.
-                    pane_id = pane.pane_id
-                    assert pane_id is not None
-                    prev = state_map.get(pane_id)
-                    new_state, entered = merge_state(prev, state, now)
-                    state_map[pane_id] = (new_state, entered)
-                    seen.add(pane_id)
-
-                    target = f"{session.session_name}:{window.window_index}.{pane.pane_index}"
-                    rows.append(
-                        AgentRow(
-                            pane_id=pane_id,
-                            target=target,
-                            project=_basename_cwd(pane.pane_current_path),
-                            agent=cfg.name,
-                            state=new_state,
-                            state_entered_at=entered,
-                            title=title,
-                            last_line=_last_nonblank_line(captured),
-                        )
-                    )
-
-    # Prune state_map of panes that disappeared.
-    for stale_pane in [pid for pid in state_map if pid not in seen]:
-        state_map.pop(stale_pane, None)
-
+    seen = {(r.socket, r.pane_id) for r in rows}
+    for stale_key in [k for k in state_map if k not in seen]:
+        state_map.pop(stale_key, None)
     return rows
 
 

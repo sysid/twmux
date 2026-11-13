@@ -507,9 +507,10 @@ tmux switcher.
 ### How it works
 
 1. `twmux watch daemon` runs as a background process started by tmux.
-2. Every `poll_interval` seconds it enumerates every pane on every tmux socket
-   via libtmux, captures the visible pane content, and classifies the state
-   per the regex rules in `~/.config/twmux/agents.toml`:
+2. Every `poll_interval` seconds it lists every pane on every tmux socket with
+   one `list-panes -a` per socket, matches panes to agents by command or
+   title, captures the visible content of the matched panes only, and
+   classifies the state per the regex rules in `~/.config/twmux/agents.toml`:
    - **wait** — agent is blocked on user input
    - **working** — agent is actively processing
    - **idle** — agent is at its prompt, nothing happening
